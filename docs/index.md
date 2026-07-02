@@ -31,7 +31,7 @@ features:
 
 lukk is documented as one story with two sides:
 
-- **[lukk](https://packagist.org/packages/lukk/lukk)** — the Laravel package. Issues and verifies the tokens, owns rotation, reuse detection, the denylist, and the optional 2FA / passkey / email-verification flows.
+- **[lukk](https://packagist.org/packages/lukk/lukk)** — the Laravel package. Issues and verifies the tokens, owns rotation, reuse detection, the denylist, and the optional 2FA / passkey / email-verification / password-reset flows.
 - **[lukk-js](https://www.npmjs.com/package/lukk-nuxt)** — the TypeScript client (`lukk-core`) and Nuxt module (`lukk-nuxt`). Attaches the bearer, refreshes before requests fail, and drives the browser ceremonies.
 
 Throughout these docs, a feature page shows **both sides**: what you configure on the server, and how you call it from the client. New here? Start with the **[Introduction](/introduction)**.

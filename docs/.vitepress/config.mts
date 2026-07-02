@@ -57,6 +57,7 @@ export default withMermaid({
           { text: 'Two-Factor (TOTP)', link: '/two-factor-authentication' },
           { text: 'Passkeys (WebAuthn)', link: '/passkeys' },
           { text: 'Email Verification', link: '/email-verification' },
+          { text: 'Password Reset', link: '/password-reset' },
           { text: 'Step-Up Confirmation', link: '/confirmation' },
         ],
       },
