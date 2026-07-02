@@ -1,0 +1,47 @@
+name: CI
+
+# Build the VitePress site with dead-link validation on. The published site is
+# deployed from the `lukk` repo's Pages workflow (served at stsepelin.github.io/lukk),
+# which checks out this repo — so this job is the content gate that keeps that green.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # lastUpdated needs full history
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build (validates every internal link + anchor)
+        run: npm run docs:build
+
+  # Optional auto-deploy: notify the `lukk` repo to rebuild + publish /lukk on every
+  # push to main. Runs only when a DOCS_DEPLOY_TOKEN secret (a PAT that can dispatch
+  # to stsepelin/lukk) is configured; otherwise trigger "Deploy Docs" there manually.
+  trigger-deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deploy to stsepelin/lukk
+        env:
+          TOKEN: ${{ secrets.DOCS_DEPLOY_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "DOCS_DEPLOY_TOKEN not set — skipping auto-deploy. Run the 'Deploy Docs' workflow in stsepelin/lukk manually."
+            exit 0
+          fi
+          curl -sf -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/stsepelin/lukk/dispatches \
+            -d '{"event_type":"docs-updated"}'
