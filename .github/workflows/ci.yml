@@ -1,13 +1,24 @@
-name: CI
+name: Docs
 
-# Build the VitePress site with dead-link validation on. The published site is
-# deployed from the `lukk` repo's Pages workflow (served at stsepelin.github.io/lukk),
-# which checks out this repo — so this job is the content gate that keeps that green.
+# Build (with dead-link validation) and deploy the unified docs to this repo's own
+# GitHub Pages at https://stsepelin.github.io/lukk-docs. Self-contained: a push here
+# builds and publishes itself — no cross-repo dispatch, no PAT.
+# Requires: Settings → Pages → Source = "GitHub Actions".
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress production deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -23,25 +34,19 @@ jobs:
       - run: npm ci
       - name: Build (validates every internal link + anchor)
         run: npm run docs:build
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/.vitepress/dist
 
-  # Optional auto-deploy: notify the `lukk` repo to rebuild + publish /lukk on every
-  # push to main. Runs only when a DOCS_DEPLOY_TOKEN secret (a PAT that can dispatch
-  # to stsepelin/lukk) is configured; otherwise trigger "Deploy Docs" there manually.
-  trigger-deploy:
+  deploy:
     needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Dispatch deploy to stsepelin/lukk
-        env:
-          TOKEN: ${{ secrets.DOCS_DEPLOY_TOKEN }}
-        run: |
-          if [ -z "$TOKEN" ]; then
-            echo "DOCS_DEPLOY_TOKEN not set — skipping auto-deploy. Run the 'Deploy Docs' workflow in stsepelin/lukk manually."
-            exit 0
-          fi
-          curl -sf -X POST \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/stsepelin/lukk/dispatches \
-            -d '{"event_type":"docs-updated"}'
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

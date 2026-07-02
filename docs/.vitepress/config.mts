@@ -7,8 +7,8 @@ import llmstxt from 'vitepress-plugin-llms'
 export default withMermaid({
   title: 'lukk',
   description: 'First-party JWT auth for Laravel — the server package and its TypeScript/Nuxt client, in one place.',
-  // Served at stsepelin.github.io/lukk (supersedes the PHP-only docs site).
-  base: '/lukk/',
+  // Self-hosted at stsepelin.github.io/lukk-docs (this repo's own Pages).
+  base: '/lukk-docs/',
   lastUpdated: true,
   // Migrated docs use real headings (not manual anchors), so validate links at build.
   ignoreDeadLinks: false,
