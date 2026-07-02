@@ -51,12 +51,13 @@ The event carries `$userId` and `$credentialId`. A **zero** counter is never fla
 
 ## Framework events
 
-lukk also dispatches two standard Laravel auth events, so your existing listeners work unchanged:
+lukk also dispatches standard Laravel auth events, so your existing listeners work unchanged:
 
 | Event | When |
 |---|---|
 | `Illuminate\Auth\Events\Lockout` | The login throttle trips — an IP has exceeded the failed-login rate limit. Listen to alert on brute-force attempts. |
 | `Illuminate\Auth\Events\Verified` | A user completes [email verification](/email-verification). |
+| `Illuminate\Auth\Events\PasswordReset` | A user completes a [password reset](/password-reset). |
 
 Login is constant-time by design (an unknown email runs the same hashing work as a wrong password), and every token-bearing response is sent `Cache-Control: no-store` — both are part of the security contract covered in [Security](/security).
 
