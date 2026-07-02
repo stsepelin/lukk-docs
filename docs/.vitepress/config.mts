@@ -1,16 +1,17 @@
-import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 import llmstxt from 'vitepress-plugin-llms'
 
 // One documentation site for both halves of lukk: the Laravel package (server) and the
 // TypeScript/Nuxt client (lukk-js). Organized by TOPIC, not by repo — each feature page
 // carries a server section and a client section, the way Inertia documents its adapters.
-export default defineConfig({
+export default withMermaid({
   title: 'lukk',
   description: 'First-party JWT auth for Laravel — the server package and its TypeScript/Nuxt client, in one place.',
   // Served at stsepelin.github.io/lukk (supersedes the PHP-only docs site).
   base: '/lukk/',
   lastUpdated: true,
-  ignoreDeadLinks: true,
+  // Migrated docs use real headings (not manual anchors), so validate links at build.
+  ignoreDeadLinks: false,
   head: [
     ['meta', { name: 'theme-color', content: '#3c8772' }],
   ],
