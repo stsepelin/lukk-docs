@@ -143,7 +143,7 @@ $pair->refreshToken;  // the opaque refresh token (shown once)
 The returned `TokenPair` is a value object; the plaintext refresh token is available only here and is never retrievable again.
 
 > [!NOTE]
-> On the client, a custom registration form that hits your own route can bind Laravel validation with the [lukk-js form helper](/use-lukk-form).
+> For sign-up specifically, prefer the first-party [registration endpoint](/registration) — it starts the session for you (and handles 2FA / email verification) instead of hand-rolling `startSession()`. On the client, a custom form that hits your own route can bind Laravel validation with the [lukk-js form helper](/use-lukk-form).
 
 ## Client (Nuxt)
 

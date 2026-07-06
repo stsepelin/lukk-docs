@@ -56,6 +56,7 @@ lukk also dispatches standard Laravel auth events, so your existing listeners wo
 | Event | When |
 |---|---|
 | `Illuminate\Auth\Events\Lockout` | The login throttle trips — an IP has exceeded the failed-login rate limit. Listen to alert on brute-force attempts. |
+| `Illuminate\Auth\Events\Registered` | A user completes [registration](/registration). |
 | `Illuminate\Auth\Events\Verified` | A user completes [email verification](/email-verification). |
 | `Illuminate\Auth\Events\PasswordReset` | A user completes a [password reset](/password-reset). |
 
