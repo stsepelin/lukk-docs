@@ -39,6 +39,7 @@ export default withMermaid({
           { text: 'Introduction', link: '/introduction' },
           { text: 'How It Works', link: '/how-it-works' },
           { text: 'Installation', link: '/installation' },
+          { text: 'Upgrading', link: '/upgrading' },
         ],
       },
       {
