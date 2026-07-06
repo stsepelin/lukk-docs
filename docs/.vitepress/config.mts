@@ -53,6 +53,7 @@ export default withMermaid({
         text: 'Features',
         items: [
           { text: 'Authentication', link: '/authentication' },
+          { text: 'Registration', link: '/registration' },
           { text: 'The User', link: '/user' },
           { text: 'Two-Factor (TOTP)', link: '/two-factor-authentication' },
           { text: 'Passkeys (WebAuthn)', link: '/passkeys' },
