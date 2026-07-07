@@ -87,6 +87,7 @@ export default withMermaid({
           { text: 'Events', link: '/events' },
           { text: 'Customization', link: '/customization' },
           { text: 'Roadmap', link: '/roadmap' },
+          { text: 'Acknowledgements', link: '/acknowledgements' },
         ],
       },
     ],

@@ -78,7 +78,7 @@ sequenceDiagram
     Note over App: access token nears expiry
     App->>API: POST /auth/refresh { refresh_token }
     API-->>App: 200 { new access_token, new refresh_token } — rotated
-    Note over API: old refresh token consumed;<br/>post-grace replay → whole family revoked
+    Note over API: old refresh token consumed<br/>post-grace replay → whole family revoked
 ```
 
 ### Logging out

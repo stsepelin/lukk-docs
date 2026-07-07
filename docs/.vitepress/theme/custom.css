@@ -1,0 +1,21 @@
+/*
+ * Mermaid diagrams
+ * ----------------
+ * Detailed sequence / flowchart diagrams are wider than the ~688px content
+ * column, so they were being clipped ("cropped") at the column edge. Cap the
+ * rendered SVG at the column width and let the container scroll horizontally,
+ * so every node / note / subgraph box stays fully visible on any screen.
+ */
+.vp-doc .mermaid {
+  overflow-x: auto;
+  /* room so a box's border/shadow at the very edge isn't shaved off */
+  padding-bottom: 0.25rem;
+  text-align: center;
+}
+
+.vp-doc .mermaid svg {
+  max-width: 100%;
+  height: auto;
+  /* keep the diagram centred once it's narrower than the column */
+  margin-inline: auto;
+}
