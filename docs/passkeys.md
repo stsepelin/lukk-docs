@@ -67,7 +67,7 @@ sequenceDiagram
     App->>B: navigator.credentials.create(options)
     B-->>App: attestation (new credential + public key)
     App->>API: POST /auth/passkeys { credential }
-    Note over API: verify attestation vs cached challenge,<br/>rp_id + origin; store credential (COSE key encrypted)
+    Note over API: verify attestation vs cached challenge,<br/>rp_id + origin · store credential (COSE key encrypted)
     API-->>App: 204 No Content
 ```
 
@@ -89,7 +89,7 @@ sequenceDiagram
     App->>B: navigator.credentials.get(options)
     B-->>App: assertion (signed by the private key)
     App->>API: POST /auth/passkeys/login { ceremony_id, credential }
-    Note over API: pull+verify challenge (single-use), origin/rp_id,<br/>signature vs stored public key, sign-count; resolve user
+    Note over API: pull+verify challenge (single-use), origin/rp_id,<br/>signature vs stored public key, sign-count · resolve user
     API-->>App: 200 { access_token, refresh_token } · amr ["webauthn"]
 ```
 
