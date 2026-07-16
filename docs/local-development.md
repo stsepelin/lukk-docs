@@ -27,6 +27,9 @@ lukk: { session: { cookieSecure: true } } // or false; default = secure in prod 
 > [!WARNING]
 > Never set `cookieSecure: false` in a production build.
 
+> [!TIP]
+> Running **two lukk apps on `localhost`** (e.g. `:3000` and `:3001`)? Cookies are scoped by host, not port, so they share one cookie jar and clobber each other's session. Give each a distinct [`session.name`](/configuration#session-name) to namespace its cookie.
+
 ## Direct mode — one env flag on the lukk API (server)
 
 In direct-cookie mode the refresh token lives in a `__Host-refresh` cookie set by the **lukk PHP API**, which can't know your front-end is a dev build. So for local dev over http, relax it on the lukk side:
