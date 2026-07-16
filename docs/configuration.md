@@ -229,6 +229,8 @@ Everything is configured under the `lukk` key in `nuxt.config.ts`:
 | `user.endpoint` | `string` | `''` | Your app's authenticated user route (per-mode). |
 | `api.path` / `api.target` / `api.forceJson` / `api.forwardSetCookie` | `string` / `string` / `bool` / `string[]` | `''` / `''` / `true` / `[]` | BFF-only app-API proxy. |
 | `session.password` | `string` | env | BFF sealed-session secret (≥ 32 chars). |
+| `session.cookieSecure` | `bool` | auto | BFF session cookie `Secure`/`__Host-` — see [Local Development](/local-development). |
+| `session.name` | `string` | — | BFF session-cookie namespace, so co-hosted apps don't collide. |
 | `confirmationHeader` | `string` | `'X-Lukk-Confirmation'` | Header carrying the step-up token. |
 | `storage` | `string` | `'cookie'` | BFF token storage backend. |
 
@@ -304,7 +306,7 @@ api: { path: '/api', target: 'https://api.example.com', forceJson: true }
 BFF-only and opt-in. Forwards `${path}/**` to the **fixed** `target` (your Laravel API), injecting the access token server-side — so the browser authenticates to your own API without ever holding a token. `target` is never derived from the request (SSRF-safe); non-GET requests with a foreign `Origin` are rejected (CSRF); the inbound `Cookie`/`Authorization` + spoofable `X-Forwarded-*` are stripped; upstream `Set-Cookie` is stripped; and `/api/_lukk/**` is never proxied.
 
 - **`forceJson`** (default `true`) sets `Accept: application/json` on forwarded requests so a JSON API renders clean `401`/`422` JSON for unauthenticated/validation errors — instead of Laravel's default guest-redirect, which 500s behind a proxy. Set `false` to forward the browser's `Accept` instead — only if a route under `path` legitimately serves a non-JSON response.
-- **`forwardSetCookie`** (default `[]`) is an allow-list of cookie **names** to pass through from the app API to the browser; everything else is stripped. The sealed session cookie is never forwardable. For a hybrid app whose Laravel API sets its own cookie (a locale, a theme) — see [Transport Modes](/transport-modes).
+- **`forwardSetCookie`** (default `[]`) is an allow-list of cookie **names** to pass through from the app API to the browser; everything else is stripped. No lukk session cookie is ever forwardable — not this app's, nor a co-hosted app's — whatever the list says. For a hybrid app whose Laravel API sets its own cookie (a locale, a theme) — see [Transport Modes](/transport-modes).
 
 > [!TIP]
 > Call the proxied API with [`useLukkFetch()`](/use-lukk-fetch) — a plain `$fetch` forwards no cookie during SSR and silently `401`s. It also rejects with a typed `LukkError` (`{ message, status, errors }`).
@@ -318,6 +320,24 @@ NUXT_LUKK_SESSION_PASSWORD=a-long-random-string-of-at-least-32-chars
 ```
 
 Only used in `bff` mode. Treat it like Laravel's `APP_KEY`: secret, and rotating it logs everyone out.
+
+### `session.name`
+
+Namespaces the BFF sealed-session cookie so **multiple lukk apps can share a host** without clobbering each other's session. Cookies are scoped by host, **not port**, so two apps on `localhost:3000` + `:3001` (or two apps under one domain via path routing) otherwise read and overwrite the same cookie — logging into one silently logs the other out. Set a distinct slug (`[A-Za-z0-9._-]`) per app:
+
+```ts
+lukk: { session: { name: 'admin' } }
+```
+
+| `session.name` | Secure (prod / `--https`) | Dev over http |
+|---|---|---|
+| unset | `__Host-lukk-session` | `lukk-session` |
+| `'admin'` | `__Host-lukk-admin-session` | `lukk-admin-session` |
+
+Unset keeps the default names, so adding it to one app doesn't change the other. Only used in `bff` mode.
+
+> [!WARNING]
+> `session.name` is **de-confliction, not a trust boundary.** Apps that share an origin — the same host with path routing, or `localhost` across ports — share one cookie jar, and the namespace only keeps their cookies from overwriting one another. The real isolation is the per-app [`session.password`](#session-password) (the seal): a co-hosted app can't decrypt or forge another app's session without its password. For apps in **distinct trust domains**, put them on **separate subdomains** — where the `__Host-` prefix plus the proxy's `Origin` check give real isolation — and give each a distinct, strong `session.password`.
 
 ### `confirmationHeader`
 
