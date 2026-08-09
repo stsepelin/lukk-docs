@@ -159,11 +159,12 @@ Run through the full [security checklist](/security) before you ship.
 
 ## Client (Nuxt) in production
 
-The client is mostly configuration you set once ([Installation](/installation), [Configuration](/configuration)); two things matter specifically at deploy time, both in **BFF mode**:
+The client is mostly configuration you set once ([Installation](/installation), [Configuration](/configuration)); three things matter specifically at deploy time:
 
+- **`baseURL` is baked into the build — so its environment variable must be present when you build.** A config like `` baseURL: `${process.env.API_URL}/auth` `` compiles the *value at build time* into the bundle; if the variable is unset in CI, it interpolates as the string `"undefined/auth"` and the deployed app answers `400` on every auth call. The module now fails the build on such a value (see [`baseURL`](/configuration#baseurl)), so make sure the variable is exported for `nuxt build` **and** any `nuxt prepare` step. The same applies to `api.target`.
 - **The session secret must be identical across every instance.** `NUXT_LUKK_SESSION_PASSWORD` is the confidentiality boundary for the sealed session cookie — the BFF equivalent of `APP_KEY`. A load-balanced deploy with per-instance secrets silently invalidates sessions, and rotating it logs everyone out. See [Configuration → the session password](/configuration).
 - **Throttling collapses onto the BFF's IP.** Every user's auth traffic egresses from the BFF server, so lukk's per-IP throttles see one address — raise the limits or forward `X-Forwarded-For` (this mirrors the server note above). Keep lukk's `grace_seconds > 0` so the proxy's single-flight refresh never trips a false family revocation.
 
-In `direct` mode there's nothing server-side to run, so neither concern applies — it's the only option for a fully static (SSG) deploy. See [Transport Modes](/transport-modes) for the trade-off, and [Local Development](/local-development) for the HTTPS-cookie caveat when running the client locally.
+In `direct` mode there's nothing server-side to run, so the two BFF-specific concerns don't apply — it's the only option for a fully static (SSG) deploy. See [Transport Modes](/transport-modes) for the trade-off, and [Local Development](/local-development) for the HTTPS-cookie caveat when running the client locally.
 
 Next: **[Local Development](/local-development)**
