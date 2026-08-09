@@ -257,8 +257,27 @@ baseURL: 'https://api.example.com/auth'
 
 In `bff` mode this is read **only on the server** and is never shipped to the browser. In `direct` mode it is part of the public runtime config, because the browser calls lukk directly — so it must be reachable from the browser and [CORS-configured on lukk](/transport-modes).
 
+**It is validated at build time.** A `baseURL` that isn't a valid absolute URL fails `nuxt build` / `nuxt prepare` with the offending value in the message, rather than building an app that answers `400` on every auth call. The check requires an `http://` or `https://` scheme — note that `localhost:3000/auth` is *parseable* (as a `localhost:` scheme) but is not a usable base, so it's rejected too.
+
+> [!WARNING]
+> The fault this catches is an **unset build-time environment variable**. A config like `` baseURL: `${process.env.API_URL}/auth` `` interpolates an undefined variable into the string `"undefined/auth"` — non-empty, so it used to build fine and then fail at runtime. Make sure the variable is present wherever you run `nuxt build` **and** `nuxt prepare` (including CI postinstall steps).
+
+In `direct` mode a **root-relative** base (`/auth`) is also accepted: the browser resolves it against the current origin, which is the right setup when lukk is served from the same origin as your app. A server-fetched base (`bff` mode) has no valid relative form.
+
+> [!CAUTION]
+> A root-relative base is **browser-only**. Node has no page to resolve it against, so calling lukk during SSR with it — e.g. `useAsyncData(() => useLukkAuth().fetchUser())` — fails to parse the URL. lukk itself never fetches this base on the server, so ordinary use is fine; just don't drive lukk calls from server-rendered data fetching. Use an absolute URL if you need that.
+
 > [!NOTE]
-> If `baseURL` is empty the module logs a warning at build time. It is the one option you always set.
+> If `baseURL` is empty the module logs a warning at build time — "not configured yet" is treated differently from "configured wrong". It is the one option you always set.
+
+A base carrying a **query or fragment** (`https://api.example.com/auth?tenant=1`) is rejected as well: the request path is appended *after* it, so `/login` would resolve to `/auth?tenant=1/login` — every route would silently hit the same upstream endpoint, including `/logout`.
+
+There is also a build-time **warning** (not an error, because only you can tell it apart from a deliberate setup) when a **production build points at loopback** (`http://localhost:…`, `127.0.0.1`) — legitimate when you're testing a production build locally, but also exactly what a dev `.env` leaking into a real deploy looks like.
+
+> [!TIP]
+> If you **build once and deploy to many environments**, don't bake a template string into `baseURL`. Leave it empty (that only warns) and supply the override for your mode at runtime: `NUXT_LUKK_BASE_URL` in `bff` mode, or `NUXT_PUBLIC_LUKK_BASE_URL` in `direct` mode — the browser reads the *public* copy, so the private one alone would leave it empty. See [environment variables](#overriding-with-environment-variables).
+>
+> One caveat in `direct` mode: the [`useLukkFetch()`](/use-lukk-fetch) app-API base is derived at **build** time, so a runtime `baseURL` override doesn't feed it. Set [`api.target`](#api-bff-app-api-proxy) explicitly if you use it.
 
 ### `mode`
 
@@ -305,6 +324,7 @@ api: { path: '/api', target: 'https://api.example.com', forceJson: true }
 
 BFF-only and opt-in. Forwards `${path}/**` to the **fixed** `target` (your Laravel API), injecting the access token server-side — so the browser authenticates to your own API without ever holding a token. `target` is never derived from the request (SSRF-safe); non-GET requests with a foreign `Origin` are rejected (CSRF); the inbound `Cookie`/`Authorization` + spoofable `X-Forwarded-*` are stripped; upstream `Set-Cookie` is stripped; and `/api/_lukk/**` is never proxied.
 
+- **`target`** is validated at build time exactly like [`baseURL`](#baseurl) — it must be an absolute `http(s)` URL when the proxy is registered. (In `direct` mode `target` isn't proxied but still becomes the app-API base for [`useLukkFetch()`](/use-lukk-fetch), so it's validated there too, where a same-origin `/api` is legitimate.)
 - **`forceJson`** (default `true`) sets `Accept: application/json` on forwarded requests so a JSON API renders clean `401`/`422` JSON for unauthenticated/validation errors — instead of Laravel's default guest-redirect, which 500s behind a proxy. Set `false` to forward the browser's `Accept` instead — only if a route under `path` legitimately serves a non-JSON response.
 - **`forwardSetCookie`** (default `[]`) is an allow-list of cookie **names** to pass through from the app API to the browser; everything else is stripped. No lukk session cookie is ever forwardable — not this app's, nor a co-hosted app's — whatever the list says. For a hybrid app whose Laravel API sets its own cookie (a locale, a theme) — see [Transport Modes](/transport-modes).
 
