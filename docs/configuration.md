@@ -275,7 +275,9 @@ A base carrying a **query or fragment** (`https://api.example.com/auth?tenant=1`
 There is also a build-time **warning** (not an error, because only you can tell it apart from a deliberate setup) when a **production build points at loopback** (`http://localhost:…`, `127.0.0.1`) — legitimate when you're testing a production build locally, but also exactly what a dev `.env` leaking into a real deploy looks like.
 
 > [!TIP]
-> If you **build once and deploy to many environments**, don't bake a template string into `baseURL`. Leave it empty (that only warns) and supply `NUXT_LUKK_BASE_URL` at runtime — see [environment variables](#overriding-with-environment-variables).
+> If you **build once and deploy to many environments**, don't bake a template string into `baseURL`. Leave it empty (that only warns) and supply the override for your mode at runtime: `NUXT_LUKK_BASE_URL` in `bff` mode, or `NUXT_PUBLIC_LUKK_BASE_URL` in `direct` mode — the browser reads the *public* copy, so the private one alone would leave it empty. See [environment variables](#overriding-with-environment-variables).
+>
+> One caveat in `direct` mode: the [`useLukkFetch()`](/use-lukk-fetch) app-API base is derived at **build** time, so a runtime `baseURL` override doesn't feed it. Set [`api.target`](#api-bff-app-api-proxy) explicitly if you use it.
 
 ### `mode`
 
