@@ -264,13 +264,18 @@ In `bff` mode this is read **only on the server** and is never shipped to the br
 
 In `direct` mode a **root-relative** base (`/auth`) is also accepted: the browser resolves it against the current origin, which is the right setup when lukk is served from the same origin as your app. A server-fetched base (`bff` mode) has no valid relative form.
 
+> [!CAUTION]
+> A root-relative base is **browser-only**. Node has no page to resolve it against, so calling lukk during SSR with it — e.g. `useAsyncData(() => useLukkAuth().fetchUser())` — fails to parse the URL. lukk itself never fetches this base on the server, so ordinary use is fine; just don't drive lukk calls from server-rendered data fetching. Use an absolute URL if you need that.
+
 > [!NOTE]
 > If `baseURL` is empty the module logs a warning at build time — "not configured yet" is treated differently from "configured wrong". It is the one option you always set.
 
-Two more build-time warnings (not errors, because only you can tell them apart from a deliberate setup):
+A base carrying a **query or fragment** (`https://api.example.com/auth?tenant=1`) is rejected as well: the request path is appended *after* it, so `/login` would resolve to `/auth?tenant=1/login` — every route would silently hit the same upstream endpoint, including `/logout`.
 
-- **A production build pointing at loopback** (`http://localhost:…`, `127.0.0.1`) — legitimate when you're testing a production build locally, but also exactly what a dev `.env` leaking into a real deploy looks like.
-- **A base carrying a query or fragment** (`https://api.example.com/auth?tenant=1`) — the request path is appended *after* it, so every call would resolve somewhere unintended.
+There is also a build-time **warning** (not an error, because only you can tell it apart from a deliberate setup) when a **production build points at loopback** (`http://localhost:…`, `127.0.0.1`) — legitimate when you're testing a production build locally, but also exactly what a dev `.env` leaking into a real deploy looks like.
+
+> [!TIP]
+> If you **build once and deploy to many environments**, don't bake a template string into `baseURL`. Leave it empty (that only warns) and supply `NUXT_LUKK_BASE_URL` at runtime — see [environment variables](#overriding-with-environment-variables).
 
 ### `mode`
 
