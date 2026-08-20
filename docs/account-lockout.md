@@ -67,14 +67,19 @@ If you do run with `0`, pair it with a listener on [`AccountLocked`](#events) so
 
 ## What's protected
 
-Two authenticators get their own independent counter, distinguished by a `purpose` column:
+Three authenticators get their own independent counter, distinguished by a `purpose` column:
 
 | Purpose | Subject | Counted failure |
 |---|---|---|
-| `login` | The normalized identifier (`lukk.username`, trimmed + lowercased + transliterated) | A failed `POST /auth/login` |
+| `login` | `id:<primary key>` when the identifier names an account; `idn:<normalized>` when it doesn't | A failed `POST /auth/login` |
 | `two_factor` | The user id | A failed TOTP code at `POST /auth/two-factor-challenge` |
+| `confirm` | The user id | A failed password at `POST /auth/confirm-password` |
 
-A `login` subject is an **identifier, not a resolved user** — a lock can name an account that doesn't exist. That's intentional: resolving first would leak account existence through the lockout's timing and behaviour, and lukk's login path is deliberately [constant-time](/security).
+`confirm` matters because [step-up confirmation](/confirmation) re-verifies the *same* password as login. Without it, a caller already holding an access token — a stolen one, an XSS'd one, a shared device — could keep guessing behind the sudo gate while the login route stayed capped. `POST /auth/confirm-passkey` is throttled but deliberately **not** locked: an assertion is a signature, not a guessable secret, so there is nothing to cap.
+
+The `login` subject keys on **identity**, not on the submitted string. Normalizing (trim, lowercase, transliterate) is many-to-one across real accounts — `аdmin@example.com` with a Cyrillic а folds onto `admin@example.com` — so keying on it would let two accounts share one counter, and a password reset on either would clear the other's lock.
+
+The `idn:` fallback is not a leftover: an identifier that names **no account** must still accumulate a counter, or `423`-vs-`422` would answer "does this account exist?" for free. A `login` lock can therefore name an address that was never registered — a lock can name an account that doesn't exist. That's intentional: resolving first would leak account existence through the lockout's timing and behaviour, and lukk's login path is deliberately [constant-time](/security).
 
 Counters are per [guard](/multiple-guards), so an admin guard and a customer guard never share one.
 
@@ -105,18 +110,19 @@ The lockout check runs **before** the rate limiter, so a locked account gets the
 
 Four things clear a counter:
 
-- **A successful authentication.** "Consecutive" is the whole point — any success ends the run and resets the count to zero.
-- **A password reset.** [Completing a reset](/password-reset) releases the `login` lock, keyed off the *resolved* user. Without this, an attacker who locked an account could keep it locked even after the owner did the one thing that should restore access — the owner would be stuck with no path left but a support ticket.
+- **A successful authentication.** "Consecutive" is the whole point — any success ends the run and resets the count to zero. A successful **login** additionally clears a `confirm` lock: it proves the same password, and it's the self-service escape when someone locked step-up with a stolen token (they can't log in without the password, so this hands them nothing).
+- **A password reset.** [Completing a reset](/password-reset) releases the `login` **and** `confirm` locks, keyed off the *resolved* user — after a reset, failures counted against the old password are meaningless. Without this, an attacker who locked an account could keep it locked even after the owner did the one thing that should restore access — the owner would be stuck with no path left but a support ticket.
 - **`release_after` elapsing**, when you've set it. This one is lazy and read-only: the lock simply *reports* unlocked, and the row is reset by the next failure or dropped by [pruning](#pruning). Nothing is written on a read path (that would break on a replica), so **no `AccountReleased` fires** for an expiry.
 - **The console command**, for your support team:
 
 ```bash
 php artisan lukk:release user@example.com
 php artisan lukk:release 42 --purpose=two_factor
+php artisan lukk:release 42 --purpose=confirm
 php artisan lukk:release user@example.com --guard=admin
 ```
 
-`--purpose` is `login` (default) or `two_factor`. `--guard` defaults to lukk's configured guard — locks are stamped with the guard that recorded them, so on a [multi-guard](/multiple-guards) app you must name the right one. The command normalizes the subject exactly the way the failure path recorded it, so pasting an address straight out of a support ticket works. It exits non-zero when no matching lock was found.
+`--purpose` is `login` (default), `two_factor`, or `confirm`. `--guard` defaults to lukk's configured guard — locks are stamped with the guard that recorded them, so on a [multi-guard](/multiple-guards) app you must name the right one. The command normalizes the subject exactly the way the failure path recorded it, so pasting an address straight out of a support ticket works. It exits non-zero when no matching lock was found.
 
 ## Pruning
 
@@ -137,7 +143,7 @@ Both are dispatched on the **transition**, not on every attempt:
 | `Lukk\Events\AccountLocked` | A consecutive-failure run just hit the cap. |
 | `Lukk\Events\AccountReleased` | A counter was cleared — by a successful authentication, a password reset, or `lukk:release`. Not by a `release_after` expiry (see [above](#releasing-a-lock)). |
 
-Each carries `$purpose`, `$subject`, and `$guard`. A locked-out user gets **no other signal** — they simply can't authenticate — so `AccountLocked` is where you send the "someone is trying to get into your account" mail, or a release link:
+Each carries `$purpose` (`login`, `two_factor` or `confirm`), `$subject`, and `$guard`. A locked-out user gets **no other signal** — they simply can't authenticate — so `AccountLocked` is where you send the "someone is trying to get into your account" mail, or a release link:
 
 ```php
 use Illuminate\Support\Facades\Event;

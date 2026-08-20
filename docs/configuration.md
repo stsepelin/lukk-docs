@@ -68,6 +68,7 @@ Every throttle lives here, each shaped as `{ max_attempts, decay_seconds }` (log
     'two_factor' => ['max_attempts' => 5, 'decay_seconds' => 60],
     'refresh' => ['max_attempts' => 30, 'decay_seconds' => 60],
     'passkeys' => ['max_attempts' => 30, 'decay_seconds' => 60],
+    'confirm' => ['max_attempts' => 5, 'decay_seconds' => 60],
 ],
 ```
 
@@ -77,6 +78,7 @@ Every throttle lives here, each shaped as `{ max_attempts, decay_seconds }` (log
 | `two_factor` | 5 / 60s | account (`sub`) | Throttles challenge-code guesses for a single account. Also guards the endpoint per IP. |
 | `refresh` | 30 / 60s | IP | Per-IP guard on `POST /auth/refresh`. |
 | `passkeys` | 30 / 60s | IP | Per-IP guard on the passkey login + assertion-options endpoints. |
+| `confirm` | 5 / 60s | account **and** IP | Guards [step-up confirmation](/confirmation) (`confirm-password`, `confirm-passkey`). Password confirmation re-checks the same secret as login, so the per-user bucket is the load-bearing one — a stolen token is one identity behind any number of addresses. |
 
 These bound a **rate**, not a run: the window keeps resetting, so `account_max_attempts` at 20/60s permits ~1,200 failures an hour indefinitely. The separate, opt-in [account lockout](/account-lockout) is what caps *consecutive* failures (NIST SP 800-63B §5.2.2).
 
