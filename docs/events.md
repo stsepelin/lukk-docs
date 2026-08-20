@@ -49,6 +49,21 @@ Event::listen(function (PasskeyCloneDetected $event) {
 
 The event carries `$userId` and `$credentialId`. A **zero** counter is never flagged — synced passkeys always report `0`.
 
+### AccountLocked / AccountReleased
+
+When the opt-in [account lockout](/account-lockout) is on, `Lukk\Events\AccountLocked` fires the moment a consecutive-failure run hits the cap, and `Lukk\Events\AccountReleased` when a counter is cleared. Both carry `$purpose` (`login` or `two_factor`), `$subject`, and `$guard`:
+
+```php
+use Illuminate\Support\Facades\Event;
+use Lukk\Events\AccountLocked;
+
+Event::listen(function (AccountLocked $event) {
+    Log::warning('Account locked', ['purpose' => $event->purpose, 'subject' => $event->subject]);
+});
+```
+
+`AccountLocked` fires **once, on the transition**, and it is the only signal a locked-out user's account gets — so it's where you'd send the "someone is trying to get into your account" mail. Note that `$subject` is a submitted identifier, not a resolved user: it need not name a real account, so rate-limit anything you send off it.
+
 ## Framework events
 
 lukk also dispatches standard Laravel auth events, so your existing listeners work unchanged:

@@ -67,6 +67,7 @@ In BFF mode the server can hydrate the authenticated `user` during server render
 | Refresh opaque + `sha256` at rest; never logged | RFC 9700 / OWASP |
 | Instant revocation (denylist by `fid`/`jti`) | OWASP Session Management |
 | Login throttled + constant-time (no user enumeration) | OWASP ASVS |
+| Consecutive failed attempts on one account capped (**opt-in**) | NIST SP 800-63B §5.2.2, ASVS V2.2.1 |
 | Tokens kept out of the browser; sealed `__Host-` cookie | OAuth 2.0 for Browser-Based Apps |
 | Token responses non-cacheable (`Cache-Control: no-store, private`) | RFC 6749 §5.1 |
 | Reuse/family-revoke emits a security event | RFC 9700 §4.14.2 |
@@ -82,6 +83,7 @@ In BFF mode the server can hydrate the authenticated `user` during server render
 - [x] Grace window prevents false logout under concurrency.
 - [x] Denylist (`fid`/`jti`) kills access within one request; global logout (`DELETE /auth/sessions`) works.
 - [x] Login throttled; password check constant-time; unknown user indistinguishable from wrong password.
+- [ ] **(Optional)** [Account lockout](/account-lockout) enabled if you must meet NIST SP 800-63B §5.2.2 — the throttles bound a *rate*, not a run of consecutive failures. Off by default: a hard lockout is a denial-of-service primitive, so set `release_after` to bound the denial.
 - [x] HS256 secret ≥ 256-bit random (`php artisan lukk:secret`); v7 enforces the minimum.
 - [x] Token responses carry `Cache-Control: no-store, private`.
 - [x] Reuse/family-revoke dispatches `Events\RefreshTokenReused`.

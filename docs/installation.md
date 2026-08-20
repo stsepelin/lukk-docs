@@ -19,7 +19,7 @@ php artisan migrate
 ```
 
 > [!NOTE]
-> lukk's migrations are **publish-only** — nothing runs until you publish it, the same convention as Sanctum and Passport. Each optional feature ([two-factor](/two-factor-authentication), [passkeys](/passkeys)) is its own publish group, so you only add its schema when you enable the feature.
+> lukk's migrations are **publish-only** — nothing runs until you publish it, the same convention as Sanctum and Passport. Each optional feature ([two-factor](/two-factor-authentication), [passkeys](/passkeys), [account lockout](/account-lockout)) is its own publish group, so you only add its schema when you enable the feature.
 
 ### Generate the signing secret
 

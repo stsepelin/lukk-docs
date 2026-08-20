@@ -64,7 +64,7 @@ Every throttle lives here, each shaped as `{ max_attempts, decay_seconds }` (log
 ```php
 'rate_limits' => [
     'ipv6_prefix' => 64,
-    'login' => ['max_attempts' => 5, 'decay_seconds' => 60, 'ip_max_attempts' => 30],
+    'login' => ['max_attempts' => 5, 'decay_seconds' => 60, 'ip_max_attempts' => 30, 'account_max_attempts' => 20],
     'two_factor' => ['max_attempts' => 5, 'decay_seconds' => 60],
     'refresh' => ['max_attempts' => 30, 'decay_seconds' => 60],
     'passkeys' => ['max_attempts' => 30, 'decay_seconds' => 60],
@@ -73,10 +73,12 @@ Every throttle lives here, each shaped as `{ max_attempts, decay_seconds }` (log
 
 | Limit | Default | Keyed on | Notes |
 |---|---|---|---|
-| `login` | 5 / 60s (+ `ip_max_attempts` 30) | normalized email + IP | Failures-only: only failed attempts count, a success clears the counter; lockout returns a `429` validation error. **`ip_max_attempts`** (env `LUKK_LOGIN_IP_MAX_ATTEMPTS`) is a separate coarse per-IP cap on *all* login attempts, bounding password-spraying across many emails. |
+| `login` | 5 / 60s (+ `ip_max_attempts` 30, `account_max_attempts` 20) | normalized email + IP | Failures-only: only failed attempts count, a success clears the counter, and tripping it returns a `429` validation error. **`ip_max_attempts`** (env `LUKK_LOGIN_IP_MAX_ATTEMPTS`) is a separate coarse per-IP cap on *all* login attempts, bounding password-spraying across many emails. **`account_max_attempts`** (env `LUKK_LOGIN_ACCOUNT_MAX_ATTEMPTS`) is an IP-**independent** per-account cap, so a botnet can't take `max_attempts` guesses *per source IP* against one account. |
 | `two_factor` | 5 / 60s | account (`sub`) | Throttles challenge-code guesses for a single account. Also guards the endpoint per IP. |
 | `refresh` | 30 / 60s | IP | Per-IP guard on `POST /auth/refresh`. |
 | `passkeys` | 30 / 60s | IP | Per-IP guard on the passkey login + assertion-options endpoints. |
+
+These bound a **rate**, not a run: the window keeps resetting, so `account_max_attempts` at 20/60s permits ~1,200 failures an hour indefinitely. The separate, opt-in [account lockout](/account-lockout) is what caps *consecutive* failures (NIST SP 800-63B §5.2.2).
 
 Each maps to a named limiter (`lukk-refresh`, `lukk-passkeys`, `lukk-2fa`) you can also override with your own `RateLimiter::for()`. Tune any of them with the matching env vars — `LUKK_REFRESH_MAX_ATTEMPTS`, `LUKK_2FA_DECAY`, and so on.
 
@@ -155,7 +157,11 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
     'denylist' => true,
     'logout_all' => true,
     'two_factor' => false,
+    'lockout' => false,
     'passkeys' => false,
+    'email_verification' => false,
+    'password_reset' => false,
+    'registration' => false,
 ],
 ```
 
@@ -166,7 +172,11 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
 | `denylist` | `true` | Honor the cache-backed revocation denylist. |
 | `logout_all` | `true` | Enable the "revoke every session" path. |
 | `two_factor` | `false` | Enable [two-factor authentication](/two-factor-authentication). Requires `pragmarx/google2fa`. |
+| `lockout` | `false` | Enable the [account lockout](/account-lockout) — the NIST SP 800-63B §5.2.2 consecutive-failure cap. Requires the `lukk-lockout-migrations` migration. |
 | `passkeys` | `false` | Enable [passkeys](/passkeys). Requires a WebAuthn library. |
+| `email_verification` | `false` | Enable [email verification](/email-verification). |
+| `password_reset` | `false` | Enable [password reset](/password-reset). |
+| `registration` | `false` | Enable [registration](/registration). |
 
 > [!WARNING]
 > The rotation, reuse-detection, and denylist features are the security core of the package. Disable them only if you fully understand the consequence.

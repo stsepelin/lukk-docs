@@ -128,6 +128,7 @@ Recovery codes let a user authenticate if they lose their device. Each code work
 - The TOTP secret is stored **encrypted** (it must be reversible to verify codes), while recovery codes are **salted and hashed** and shown only once.
 - A TOTP code cannot be replayed within its 30-second window — accepted codes are cached and rejected on reuse.
 - The verification window is ±1 step and should not be widened (see [Configuration](/configuration#two-factor)).
+- Challenge codes are throttled per account. With the opt-in [account lockout](/account-lockout) enabled, a run of failed codes also locks the second factor (`423`) — but a **recovery code is never gated by that lock**, so an attacker can't strand a user by burning their TOTP budget.
 
 > [!WARNING]
 > TOTP is **not phishing-resistant**. A real-time attacker-in-the-middle (such as Evilginx) can relay a code and steal the session. For phishing-resistant authentication, use [passkeys](/passkeys).

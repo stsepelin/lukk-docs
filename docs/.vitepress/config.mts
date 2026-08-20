@@ -61,6 +61,7 @@ export default withMermaid({
           { text: 'Email Verification', link: '/email-verification' },
           { text: 'Password Reset', link: '/password-reset' },
           { text: 'Step-Up Confirmation', link: '/confirmation' },
+          { text: 'Account Lockout', link: '/account-lockout' },
           { text: 'Multiple Guards', link: '/multiple-guards' },
         ],
       },
