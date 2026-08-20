@@ -232,6 +232,7 @@ Everything is configured under the `lukk` key in `nuxt.config.ts`:
 | `session.cookieSecure` | `bool` | auto | BFF session cookie `Secure`/`__Host-` — see [Local Development](/local-development). |
 | `session.name` | `string` | — | BFF session-cookie namespace, so co-hosted apps don't collide. |
 | `confirmationHeader` | `string` | `'X-Lukk-Confirmation'` | Header carrying the step-up token. |
+| `clientIpHeader` | `string` | `''` | BFF-only, opt-in — forward the real visitor IP upstream. |
 | `storage` | `string` | `'cookie'` | BFF token storage backend. |
 
 ```ts
@@ -328,6 +329,8 @@ BFF-only and opt-in. Forwards `${path}/**` to the **fixed** `target` (your Larav
 - **`forceJson`** (default `true`) sets `Accept: application/json` on forwarded requests so a JSON API renders clean `401`/`422` JSON for unauthenticated/validation errors — instead of Laravel's default guest-redirect, which 500s behind a proxy. Set `false` to forward the browser's `Accept` instead — only if a route under `path` legitimately serves a non-JSON response.
 - **`forwardSetCookie`** (default `[]`) is an allow-list of cookie **names** to pass through from the app API to the browser; everything else is stripped. No lukk session cookie is ever forwardable — not this app's, nor a co-hosted app's — whatever the list says. For a hybrid app whose Laravel API sets its own cookie (a locale, a theme) — see [Transport Modes](/transport-modes).
 
+**Request headers pass through.** Headers the proxy does not explicitly strip or overwrite reach your API unchanged — this is intentional and covered by tests, so you can depend on it. It's what lets an app carry per-visitor data across the proxy hop that the hop would otherwise destroy: a Nitro middleware can copy Cloudflare's `CF-IPCountry` / `CF-IPCity` onto your own `X-Visitor-*` headers (a prefix Cloudflare won't re-stamp) and read them on the Laravel side, since the proxy's own connection is re-stamped with the *server's* location. What the proxy does replace: `Cookie`, `Authorization`, the step-up confirmation header, `X-Forwarded-For`, and the spoofable forwarding set (`X-Real-IP`, `CF-Connecting-IP`, `Forwarded`, …), all of which are credentials or client-identity claims a browser must not be able to assert.
+
 > [!TIP]
 > Call the proxied API with [`useLukkFetch()`](/use-lukk-fetch) — a plain `$fetch` forwards no cookie during SSR and silently `401`s. It also rejects with a typed `LukkError` (`{ message, status, errors }`).
 
@@ -358,6 +361,53 @@ Unset keeps the default names, so adding it to one app doesn't change the other.
 
 > [!WARNING]
 > `session.name` is **de-confliction, not a trust boundary.** Apps that share an origin — the same host with path routing, or `localhost` across ports — share one cookie jar, and the namespace only keeps their cookies from overwriting one another. The real isolation is the per-app [`session.password`](#session-password) (the seal): a co-hosted app can't decrypt or forge another app's session without its password. For apps in **distinct trust domains**, put them on **separate subdomains** — where the `__Host-` prefix plus the proxy's `Origin` check give real isolation — and give each a distinct, strong `session.password`.
+
+### `clientIpHeader`
+
+**The problem it solves.** In BFF mode every upstream call is a fresh connection from your Nitro server, so the address your API sees is the *proxy*, not the visitor. Anything keying on `$request->ip()` therefore treats your entire user base as one identity — a `throttle:5,1` on a public form becomes **5 requests per minute globally**, and one user can lock out everyone else. lukk's own auth throttles (`login`, `forgot-password`, `two-factor-challenge`, and `refresh` at 30/60s) collapse the same way.
+
+Blanking the browser-settable forwarding headers is the right default — otherwise any client could claim any IP and defeat your rate limiting. This option is how you say *"this hop is trusted"* when it genuinely is:
+
+```ts
+// nuxt.config
+lukk: { clientIpHeader: 'cf-connecting-ip' }
+```
+
+Both proxies and the server-side token refresh then forward that address upstream as `X-Forwarded-For`. Unset, nothing changes.
+
+#### It must be a header your edge *sets*
+
+Name a header your edge **overwrites** — `cf-connecting-ip` behind Cloudflare, or `x-real-ip` if your own nginx sets it. A header your edge merely *appends* to (the usual `X-Forwarded-For` chain) leaves the leftmost entry client-controlled, and trusting it would let a visitor forge their address — worse than the shared bucket you started with. The module warns at build if you name one, and a list-valued header is rejected at runtime.
+
+> [!WARNING]
+> **Your origin must not be reachable except through that edge.** There is no socket-peer check here (unlike Laravel's `TrustProxies`), so if someone can reach Nitro directly — a leaked origin IP, no firewall on your CDN's ranges — they can simply set the header themselves. Lock the origin down before enabling this.
+
+#### Configure Laravel to trust *only* this header
+
+`$request->ip()` ignores `X-Forwarded-For` until `TrustProxies` trusts the hop. Scope it explicitly:
+
+```php
+// bootstrap/app.php
+->withMiddleware(function (Middleware $middleware) {
+    $middleware->trustProxies(at: '*', headers: Request::HEADER_X_FORWARDED_FOR);
+})
+```
+
+> [!CAUTION]
+> **Pass `headers:` — Laravel's default mask is the broken one here.** It also trusts `X-Forwarded-Host`, which the BFF blanks for safety. Trusting a blanked host makes `$request->getHost()` return **empty**, so every `url()`, `route()`, signed URL and mail link renders as `http:///…`. Scoping to `HEADER_X_FORWARDED_FOR` avoids that, and also stops a spoofed host from poisoning email-verification links.
+
+`at: '*'` trusts only the **immediate peer**. If a CDN or load balancer sits between your BFF and Laravel, list your BFF's egress IP/CIDR instead — otherwise `$request->ip()` silently resolves to the BFF again and the option does nothing.
+
+#### Restore your rate limits afterwards
+
+If you previously raised lukk's limits to stop a BFF deployment throttling itself, **lower them back to the per-user defaults** once this is on. Inflated limits that were safe against one shared bucket become a per-attacker-IP budget — 5000 login attempts/minute/IP is no throttle at all.
+
+Two things worth knowing once buckets really are per-visitor: an IPv6 visitor typically controls a whole `/64`, and per-IP limits alone no longer cap password spraying or signup floods across rotating addresses. Keep the per-account backstops (`account_max_attempts`, the 2FA per-user limit) in place.
+
+> [!NOTE]
+> On non-Node Nitro presets (Cloudflare, Deno, Bun, edge runtimes) there is no socket address to fall back to, so `clientIpHeader` is the **only** way your upstream ever learns the caller.
+>
+> Enabling this means your auth server receives — and likely logs — visitor IP addresses, which are personal data under GDPR. lukk itself neither stores nor logs them (they become a short-lived cache key with a `decay_seconds` TTL); your own application logging is where any retention obligation lands.
 
 ### `confirmationHeader`
 

@@ -51,7 +51,7 @@ Where the tokens physically live is a [transport-mode](/transport-modes) choice,
 In BFF mode the server can hydrate the authenticated `user` during server rendering. The invariants hold: **no token in the payload** (only your app `user` resource is serialized; the access/refresh token never leaves the server), a page embedding a per-user identity is marked `Cache-Control: no-store` so a shared cache can't cross-serve renders, and an anonymous/tampered/expired-seal request **fails safe** as logged-out with no minted cookie and no 500. See [Transport Modes → SSR hydration](/transport-modes#ssr-hydration).
 
 > [!NOTE]
-> **Throttling under BFF.** Every user's auth traffic egresses from the BFF server's IP, so lukk's *per-IP* refresh/login throttles collapse onto one address — raise them for a BFF deployment and forward `X-Forwarded-For`. Keep `grace_seconds > 0`: the proxy single-flights refresh, but a zero grace window turns any concurrent refresh into a full-family revocation.
+> **Throttling under BFF.** Every user's auth traffic egresses from the BFF server's IP, so lukk's *per-IP* refresh/login throttles collapse onto one address. Forward the real client with [`clientIpHeader`](/configuration#clientipheader) (and restore any limits you had raised to compensate — inflated limits become a per-attacker budget once forwarding works). Keep `grace_seconds > 0`: the proxy single-flights refresh, but a zero grace window turns any concurrent refresh into a full-family revocation.
 
 ## Standards mapping
 
