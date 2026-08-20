@@ -59,10 +59,11 @@ The `iss` and `aud` claims stamped into every token and validated on every reque
 
 ### Rate limits
 
-Every throttle lives here, each shaped as `{ max_attempts, decay_seconds }` (login adds a third key, `ip_max_attempts`):
+Every throttle lives here, each shaped as `{ max_attempts, decay_seconds }` (login adds `ip_max_attempts` and `account_max_attempts`), plus one scalar — `ipv6_prefix` — that applies to them all:
 
 ```php
 'rate_limits' => [
+    'ipv6_prefix' => 64,
     'login' => ['max_attempts' => 5, 'decay_seconds' => 60, 'ip_max_attempts' => 30],
     'two_factor' => ['max_attempts' => 5, 'decay_seconds' => 60],
     'refresh' => ['max_attempts' => 30, 'decay_seconds' => 60],
@@ -78,6 +79,17 @@ Every throttle lives here, each shaped as `{ max_attempts, decay_seconds }` (log
 | `passkeys` | 30 / 60s | IP | Per-IP guard on the passkey login + assertion-options endpoints. |
 
 Each maps to a named limiter (`lukk-refresh`, `lukk-passkeys`, `lukk-2fa`) you can also override with your own `RateLimiter::for()`. Tune any of them with the matching env vars — `LUKK_REFRESH_MAX_ATTEMPTS`, `LUKK_2FA_DECAY`, and so on.
+
+**What "keyed on IP" actually means.** Every throttle buckets on `Lukk::rateLimitKey()`, which is the caller's address with IPv6 collapsed to **`ipv6_prefix`** (default `/64`, env `LUKK_RATE_LIMIT_IPV6_PREFIX`). A subscriber is typically handed a whole `/64`, so keying on the full address would let one visitor mint effectively unlimited buckets and walk through every per-IP limit. IPv4 is used as-is, and addresses that embed IPv4 (IPv4-mapped, NAT64's `64:ff9b::/96`) are unwrapped rather than masked — otherwise a whole translated client population would share one counter. Raise it toward `128` if your users share a `/64` (an office or campus LAN does); lower it if your attackers hold larger delegations.
+
+Behind a BFF or reverse proxy that address is the **proxy** until the deployment forwards the real client — see [`clientIpHeader`](#clientipheader). Replace the identity entirely when the source address isn't the right bucket for you (a shared API gateway, a tenant, a CDN's own visitor token):
+
+```php
+// A service provider's boot()
+Lukk::rateLimitKeyUsing(fn (Request $request) => 'tenant-'.$request->user()?->tenant_id);
+```
+
+The value must be something the caller cannot forge — it also buckets the login limiter, so a spoofable header would let an attacker mint a fresh bucket per request. It is used verbatim as part of a cache key, so namespace anything untrusted. Returning an empty value falls back to the address rather than silently putting every caller in one bucket.
 
 ### Denylist
 
@@ -330,7 +342,7 @@ BFF-only and opt-in. Forwards `${path}/**` to the **fixed** `target` (your Larav
 - **`forceJson`** (default `true`) sets `Accept: application/json` on forwarded requests so a JSON API renders clean `401`/`422` JSON for unauthenticated/validation errors — instead of Laravel's default guest-redirect, which 500s behind a proxy. Set `false` to forward the browser's `Accept` instead — only if a route under `path` legitimately serves a non-JSON response.
 - **`forwardSetCookie`** (default `[]`) is an allow-list of cookie **names** to pass through from the app API to the browser; everything else is stripped. No lukk session cookie is ever forwardable — not this app's, nor a co-hosted app's — whatever the list says. For a hybrid app whose Laravel API sets its own cookie (a locale, a theme) — see [Transport Modes](/transport-modes).
 
-**Request headers pass through.** Headers the proxy does not explicitly strip or overwrite reach your API unchanged — this is intentional and covered by tests, so you can depend on it. It's what lets an app carry per-visitor data across the proxy hop that the hop would otherwise destroy: a Nitro middleware can copy Cloudflare's `CF-IPCountry` / `CF-IPCity` onto your own `X-Visitor-*` headers (a prefix Cloudflare won't re-stamp) and read them on the Laravel side, since the proxy's own connection is re-stamped with the *server's* location. What the proxy does replace: `Cookie`, `Authorization`, the step-up confirmation header, `X-Forwarded-For`, and the spoofable forwarding set (`X-Real-IP`, `CF-Connecting-IP`, `Forwarded`, …), all of which are credentials or client-identity claims a browser must not be able to assert.
+**Request headers pass through.** Headers the proxy does not explicitly strip or overwrite reach your API unchanged — this is intentional and covered by tests, so you can depend on it. It's what lets an app carry per-visitor data across the proxy hop that the hop would otherwise destroy: a Nitro middleware can copy Cloudflare's `CF-IPCountry` / `CF-IPCity` onto your own `X-Visitor-*` headers (a prefix Cloudflare won't re-stamp) and read them on the Laravel side, since the proxy's own connection is re-stamped with the *server's* location. What the proxy replaces: `Cookie`, `Authorization`, the step-up confirmation header, `X-Forwarded-For`, the spoofable forwarding set (`X-Real-IP`, `CF-Connecting-IP`, `Forwarded`, …) — all credentials or client-identity claims a browser must not assert — and `Accept` while `api.forceJson` is on. A handful of hop-by-hop headers (`connection`, `transfer-encoding`, `accept-encoding`, `upgrade`, `expect`, `host`) are dropped by the proxy layer itself and don't transit either.
 
 > [!TIP]
 > Call the proxied API with [`useLukkFetch()`](/use-lukk-fetch) — a plain `$fetch` forwards no cookie during SSR and silently `401`s. It also rejects with a typed `LukkError` (`{ message, status, errors }`).
@@ -383,27 +395,32 @@ Name a header your edge **overwrites** — `cf-connecting-ip` behind Cloudflare,
 > [!WARNING]
 > **Your origin must not be reachable except through that edge.** There is no socket-peer check here (unlike Laravel's `TrustProxies`), so if someone can reach Nitro directly — a leaked origin IP, no firewall on your CDN's ranges — they can simply set the header themselves. Lock the origin down before enabling this.
 
-#### Configure Laravel to trust *only* this header
+#### Configure Laravel to trust *only* this header — and only your BFF
 
-`$request->ip()` ignores `X-Forwarded-For` until `TrustProxies` trusts the hop. Scope it explicitly:
+`$request->ip()` ignores `X-Forwarded-For` until `TrustProxies` trusts the hop. Trust the BFF's **egress address**, not "whoever connects":
 
 ```php
 // bootstrap/app.php
+use Illuminate\Http\Request;
+
 ->withMiddleware(function (Middleware $middleware) {
-    $middleware->trustProxies(at: '*', headers: Request::HEADER_X_FORWARDED_FOR);
+    $middleware->trustProxies(at: '10.0.0.5', headers: Request::HEADER_X_FORWARDED_FOR);
 })
 ```
 
 > [!CAUTION]
-> **Pass `headers:` — Laravel's default mask is the broken one here.** It also trusts `X-Forwarded-Host`, which the BFF blanks for safety. Trusting a blanked host makes `$request->getHost()` return **empty**, so every `url()`, `route()`, signed URL and mail link renders as `http:///…`. Scoping to `HEADER_X_FORWARDED_FOR` avoids that, and also stops a spoofed host from poisoning email-verification links.
+> **`at: '*'` does not mean "trust every address" — it means *trust whoever connected*.** If your Laravel origin is reachable from anywhere (the default on most hosts), an attacker connecting directly *is* the trusted peer, so their own `X-Forwarded-For` is believed. They then mint a fresh throttle bucket per request — defeating every per-IP limit, including the per-IP cap that is the only defence against password spraying — or pick a victim's address and burn *their* login budget. Use `'*'` only when the origin is network-isolated to the BFF.
 
-`at: '*'` trusts only the **immediate peer**. If a CDN or load balancer sits between your BFF and Laravel, list your BFF's egress IP/CIDR instead — otherwise `$request->ip()` silently resolves to the BFF again and the option does nothing.
+> [!CAUTION]
+> **Pass `headers:` — Laravel's default mask is the wrong one here.** It also trusts `X-Forwarded-Host`, which the app-API proxy blanks for safety. Trusting a blanked host makes `$request->getHost()` return **empty**, so `url()`, `route()` and signed URLs on routes behind that proxy render as `http:///…`. Scoping to `HEADER_X_FORWARDED_FOR` avoids it, and also stops a spoofed host reaching your app.
+
+If a CDN or load balancer sits between your BFF and Laravel, list both hops — otherwise `$request->ip()` resolves to the BFF again and the option silently does nothing.
 
 #### Restore your rate limits afterwards
 
 If you previously raised lukk's limits to stop a BFF deployment throttling itself, **lower them back to the per-user defaults** once this is on. Inflated limits that were safe against one shared bucket become a per-attacker-IP budget — 5000 login attempts/minute/IP is no throttle at all.
 
-Two things worth knowing once buckets really are per-visitor: an IPv6 visitor typically controls a whole `/64`, and per-IP limits alone no longer cap password spraying or signup floods across rotating addresses. Keep the per-account backstops (`account_max_attempts`, the 2FA per-user limit) in place.
+Once buckets really are per-visitor, lukk keys IPv6 callers on their `/64` rather than the full address (a subscriber typically holds a whole `/64`, so keying on the address would let one visitor mint unlimited buckets). Tune it with [`rate_limits.ipv6_prefix`](#rate-limits) — raise it toward `128` if your users share a `/64`, as an office or campus LAN does. Note that per-IP limits alone no longer cap password spraying or signup floods across rotating addresses; keep the per-account backstops (`account_max_attempts`, the per-user 2FA limit) in place.
 
 > [!NOTE]
 > On non-Node Nitro presets (Cloudflare, Deno, Bun, edge runtimes) there is no socket address to fall back to, so `clientIpHeader` is the **only** way your upstream ever learns the caller.

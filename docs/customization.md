@@ -112,3 +112,16 @@ The cryptographic and revocation seams are contracts too. Rebind `Contracts\Toke
 | `PasskeyRepository` | `DatabasePasskeyRepository` | Persists passkey credentials. |
 
 That's the whole customization surface. For the design rationale behind these seams, see [Architecture](/architecture); for the events lukk fires at the security-relevant moments, see [Events](/events). Questions or contributions are welcome on the [lukk](https://github.com/stsepelin/lukk) and [lukk-js](https://github.com/stsepelin/lukk-js) repositories.
+
+## `Lukk::rateLimitKeyUsing()`
+
+Replace the identity every lukk throttle buckets on. The default is the caller's address, with IPv6 masked to [`rate_limits.ipv6_prefix`](/configuration#rate-limits); override it when the source address isn't the right bucket — a shared API gateway, a tenant, a CDN's own visitor token.
+
+```php
+use Illuminate\Http\Request;
+use Lukk\Lukk;
+
+Lukk::rateLimitKeyUsing(fn (Request $request) => 'tenant-'.$request->user()?->tenant_id);
+```
+
+The callback runs on every throttled request, so keep it cheap. The value must be **unforgeable** — it also buckets the login limiter, so a spoofable header would let an attacker mint a fresh bucket per request — and it is used verbatim as part of a cache key, so namespace anything untrusted. An empty return falls back to the address. Under a long-running worker (Octane) the closure outlives the request that registered it: derive everything from the `$request` argument, never capture it.

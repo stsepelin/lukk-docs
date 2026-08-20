@@ -53,7 +53,7 @@ These routes are registered only when `features.email_verification` is enabled.
 | `GET` | `/auth/email/verify/{id}/{hash}` | `signed` + throttle | The email-link target. Verifies, then redirects to `frontend_url` (browser) or returns `204` (JSON client). |
 | `POST` | `/auth/email/verification-notification` | `auth` + throttle | Resend the verification link to the authenticated user (`202`). |
 
-Both are throttled by the `lukk-email-verification` limiter (`rate_limits.email_verification`).
+Both are throttled by the `lukk-email-verification` limiter (the authenticated resend carries a second, per-user limit as well, so rotating source addresses can't mail-bomb one inbox) (`rate_limits.email_verification`).
 
 ### Sending the first email
 
