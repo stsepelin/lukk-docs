@@ -173,6 +173,7 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
     'logout_all' => true,
     'two_factor' => false,
     'lockout' => false,
+    'change_password' => true,
     'passkeys' => false,
     'email_verification' => false,
     'password_reset' => false,
@@ -188,10 +189,10 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
 | `logout_all` | `true` | Enable the "revoke every session" path. |
 | `two_factor` | `false` | Enable [two-factor authentication](/two-factor-authentication). Requires `pragmarx/google2fa`. |
 | `lockout` | `false` | Enable the [account lockout](/account-lockout) — the NIST SP 800-63B §5.2.2 consecutive-failure cap. Requires the `lukk-lockout-migrations` migration. |
+| `change_password` | **`true`** | Enable [change password](/change-password) (`POST /auth/password`). On by default — it needs no configuration. |
 | `passkeys` | `false` | Enable [passkeys](/passkeys). Requires a WebAuthn library. |
 | `email_verification` | `false` | Enable [email verification](/email-verification). |
 | `password_reset` | `false` | Enable [password reset](/password-reset). |
-| `change_password` | **`true`** | Enable [change password](/change-password) (`POST /auth/password`). On by default — it needs no configuration. |
 | `registration` | `false` | Enable [registration](/registration). |
 
 > [!WARNING]
