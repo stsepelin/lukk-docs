@@ -122,4 +122,19 @@ Each app's BFF seals only its guard's tokens in its own cookie; with subdomains,
 - **Harden the admin tier further:** mandatory phishing-resistant MFA (passkeys), shorter TTLs, network-gated host, and an immutable audit log of admin actions.
 - Per-guard email-verification / password-reset / 2FA / passkeys aren't wired to extra guards yet — those features run on the default guard.
 
+## Cookie mode across guards
+
+In [cookie mode](/transport-modes#direct) each guard gets its **own** refresh cookie: the default guard keeps `__Host-refresh`, and every other guard is suffixed with its name (`__Host-refresh-admin`). Guards may legitimately share a host and differ only by path, and a single cookie name at `Path=/` meant logging into one silently overwrote the other's cookie — each login destroying the other session.
+
+Per-guard `cookie_mode`, `refresh_ttl` and `cookie.*` overrides are honoured too, so a short-lived admin session can sit alongside a long-lived user one:
+
+```php
+'guards' => [
+    'admin' => [
+        'audience' => ['https://admin.example.com'],
+        'refresh_ttl' => 60 * 60 * 8,   // 8 hours, vs the default guard's 30 days
+    ],
+],
+```
+
 Next: **[Security](/security)**

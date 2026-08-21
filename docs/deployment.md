@@ -142,6 +142,8 @@ public function boot(): void
 }
 ```
 
+The same command also drops spent [account-lockout](/account-lockout) counters when that feature is on (`--lockout-days=30`); a lock that is still held is never pruned.
+
 Only the auth service (the one holding the `refresh_tokens` table) prunes; verify-only API services have no database to prune.
 
 ### Operational requirements

@@ -64,19 +64,23 @@ Every throttle lives here, each shaped as `{ max_attempts, decay_seconds }` (log
 ```php
 'rate_limits' => [
     'ipv6_prefix' => 64,
-    'login' => ['max_attempts' => 5, 'decay_seconds' => 60, 'ip_max_attempts' => 30],
+    'login' => ['max_attempts' => 5, 'decay_seconds' => 60, 'ip_max_attempts' => 30, 'account_max_attempts' => 20],
     'two_factor' => ['max_attempts' => 5, 'decay_seconds' => 60],
     'refresh' => ['max_attempts' => 30, 'decay_seconds' => 60],
     'passkeys' => ['max_attempts' => 30, 'decay_seconds' => 60],
+    'confirm' => ['max_attempts' => 5, 'decay_seconds' => 60],
 ],
 ```
 
 | Limit | Default | Keyed on | Notes |
 |---|---|---|---|
-| `login` | 5 / 60s (+ `ip_max_attempts` 30) | normalized email + IP | Failures-only: only failed attempts count, a success clears the counter; lockout returns a `429` validation error. **`ip_max_attempts`** (env `LUKK_LOGIN_IP_MAX_ATTEMPTS`) is a separate coarse per-IP cap on *all* login attempts, bounding password-spraying across many emails. |
+| `login` | 5 / 60s (+ `ip_max_attempts` 30, `account_max_attempts` 20) | normalized email + IP | Failures-only: only failed attempts count, a success clears the counter, and tripping it returns a `429` validation error. **`ip_max_attempts`** (env `LUKK_LOGIN_IP_MAX_ATTEMPTS`) is a separate coarse per-IP cap on *all* login attempts, bounding password-spraying across many emails. **`account_max_attempts`** (env `LUKK_LOGIN_ACCOUNT_MAX_ATTEMPTS`) is an IP-**independent** per-account cap, so a botnet can't take `max_attempts` guesses *per source IP* against one account. |
 | `two_factor` | 5 / 60s | account (`sub`) | Throttles challenge-code guesses for a single account. Also guards the endpoint per IP. |
 | `refresh` | 30 / 60s | IP | Per-IP guard on `POST /auth/refresh`. |
 | `passkeys` | 30 / 60s | IP | Per-IP guard on the passkey login + assertion-options endpoints. |
+| `confirm` | 5 / 60s | account **and** IP | Guards [step-up confirmation](/confirmation) (`confirm-password`, `confirm-passkey`). Password confirmation re-checks the same secret as login, so the per-user bucket is the load-bearing one — a stolen token is one identity behind any number of addresses. |
+
+These bound a **rate**, not a run: the window keeps resetting, so `account_max_attempts` at 20/60s permits ~1,200 failures an hour indefinitely. The separate, opt-in [account lockout](/account-lockout) is what caps *consecutive* failures (NIST SP 800-63B §5.2.2).
 
 Each maps to a named limiter (`lukk-refresh`, `lukk-passkeys`, `lukk-2fa`) you can also override with your own `RateLimiter::for()`. Tune any of them with the matching env vars — `LUKK_REFRESH_MAX_ATTEMPTS`, `LUKK_2FA_DECAY`, and so on.
 
@@ -91,6 +95,16 @@ Lukk::rateLimitKeyUsing(fn (Request $request) => 'tenant-'.$request->user()?->te
 
 The value must be something the caller cannot forge — it also buckets the login limiter, so a spoofable header would let an attacker mint a fresh bucket per request. It is used verbatim as part of a cache key, so namespace anything untrusted. Returning an empty value falls back to the address rather than silently putting every caller in one bucket.
 
+### Fork detection
+
+```php
+'fork_threshold' => 3,   // live tokens in one family before RefreshFamilyForked fires
+```
+
+Env: `LUKK_FORK_THRESHOLD`. Minimum 2.
+
+The [grace window](/tokens-and-rotation#the-grace-window) mints a sibling for a concurrent refresh, so a family legitimately carries two or three live tokens. Above this, [`RefreshFamilyForked`](/events) fires. Advisory only — see the event for why lukk doesn't act on it automatically.
+
 ### Denylist
 
 ```php
@@ -101,6 +115,9 @@ The cache store backing the revocation denylist. `null` uses your application's 
 
 > [!IMPORTANT]
 > Across **multiple nodes** this must be a **shared, persistent** store (e.g. Redis) — not the `array` driver and not a per-node cache. The same store also backs the TOTP replay cache and the passkey/2FA throttles; if it isn't shared, a revoked token can still be honored on another node and replay protection isn't authoritative.
+
+> [!WARNING]
+> lukk **refuses to boot in production** on an `array` or `null` cache store. Token revocation, TOTP replay protection and passkey challenges all live here; an array store is per-process, so a revoked token stays valid on every other worker and the single-use guarantees stop being guarantees — silently. Outside production nothing changes, and the array driver stays the right default for a test suite.
 
 ### Output mode
 
@@ -155,7 +172,11 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
     'denylist' => true,
     'logout_all' => true,
     'two_factor' => false,
+    'lockout' => false,
     'passkeys' => false,
+    'email_verification' => false,
+    'password_reset' => false,
+    'registration' => false,
 ],
 ```
 
@@ -166,7 +187,11 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
 | `denylist` | `true` | Honor the cache-backed revocation denylist. |
 | `logout_all` | `true` | Enable the "revoke every session" path. |
 | `two_factor` | `false` | Enable [two-factor authentication](/two-factor-authentication). Requires `pragmarx/google2fa`. |
+| `lockout` | `false` | Enable the [account lockout](/account-lockout) — the NIST SP 800-63B §5.2.2 consecutive-failure cap. Requires the `lukk-lockout-migrations` migration. |
 | `passkeys` | `false` | Enable [passkeys](/passkeys). Requires a WebAuthn library. |
+| `email_verification` | `false` | Enable [email verification](/email-verification). |
+| `password_reset` | `false` | Enable [password reset](/password-reset). |
+| `registration` | `false` | Enable [registration](/registration). |
 
 > [!WARNING]
 > The rotation, reuse-detection, and denylist features are the security core of the package. Disable them only if you fully understand the consequence.

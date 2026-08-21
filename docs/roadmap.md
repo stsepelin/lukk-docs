@@ -31,6 +31,8 @@ Grouped by theme; likely order: change password → abilities/scopes → account
 - **[Multiple guards](/multiple-guards)** — per-guard cryptographic token identity, guard-scoped refresh/revocation/throttling, per-guard routes (path or subdomain), boot-time isolation guardrails.
 - **[Registration](/registration)** — `POST /auth/register` mirroring login, fully customizable, with an auto-login toggle.
 - **Configurable login identifier** — `lukk.username` (default `email`); login by any unique column.
+- **[Account lockout](/account-lockout)** *(opt-in)* — a persistent cap on **consecutive** failed attempts (NIST SP 800-63B §5.2.2), covering password login, the two-factor challenge and step-up confirmation; `423`, an operator release command, and lock/release events. Off by default: a hard lockout is a denial-of-service primitive.
+- **Throttle identity** — every limit keys on `Lukk::rateLimitKey()`, with IPv6 collapsed to a configurable prefix (default `/64`) and `Lukk::rateLimitKeyUsing()` to replace the identity wholesale.
 - **[Two-factor (TOTP)](/two-factor-authentication)** — enrol, confirm, challenge at login, single-use recovery codes (+ remaining count), disable.
 - **[Passkeys (WebAuthn)](/passkeys)** — register, passwordless login, list, remove.
 - **[Step-up confirmation](/confirmation)** — "sudo" re-auth (password or passkey) gating sensitive routes via `lukk.confirm`.

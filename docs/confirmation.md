@@ -55,6 +55,12 @@ Authorization: Bearer <access token>
 
 Both endpoints return the same kind of `confirmation_token` — the credential used is interchangeable.
 
+#### Throttling
+
+Both endpoints are rate-limited (`rate_limits.confirm`, default **5 / 60s**), keyed on **both** the user and the IP — the per-user bucket is the load-bearing one, since a caller holding a stolen access token is a single identity behind however many addresses they like. A tripped limit returns `429`.
+
+Password confirmation re-verifies the *same* secret as login, so it also counts toward the opt-in [account lockout](/account-lockout) under the `confirm` purpose; a locked step-up answers `423`, and a successful login or a password reset clears it. `confirm-passkey` is throttled but never locked — an assertion is a signature, not a guessable secret, so there's nothing to cap.
+
 ### Gating your own routes
 
 Apply the `lukk.confirm` middleware to any route that should require a fresh confirmation — account deletion, an email change, revealing an API key, and so on:

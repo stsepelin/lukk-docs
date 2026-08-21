@@ -38,6 +38,10 @@ Lukk::authenticateUsing(function (Request $request) {
 });
 ```
 
+> [!WARNING]
+> If your callback authenticates on a **different field**, set `lukk.username` to match it. The login throttle and the [account lockout](/account-lockout) both key on that field — with a mismatch the lockout never sees an identifier to count and silently does nothing.
+
+
 The login **throttle** still wraps your closure — failed attempts are rate-limited exactly as on the default path. **Constant-time** behaviour, however, becomes *your* responsibility: the package's unknown-user timing equalizer only runs on the built-in email/password path, so a closure that does `User::where(...)->first()` and hashes only when the user exists leaks a user-enumeration timing oracle. Make your closure take the same time whether or not the account exists — e.g. always run a `Hash::check` against a dummy hash when no user is found.
 
 ## Custom token claims
