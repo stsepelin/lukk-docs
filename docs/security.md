@@ -63,7 +63,7 @@ In BFF mode the server can hydrate the authenticated `user` during server render
 | Access TTL ≤ 15 min | RFC 9700 |
 | Refresh-token rotation | OAuth 2.1 §6 |
 | Reuse detection → family revoke | RFC 9700 §4.14 |
-| Concurrency without false logout (grace window) | fosite / Okta reuse interval |
+| Concurrency without false logout (grace window) — a [deliberate deviation](/tokens-and-rotation#a-deliberate-deviation-from-the-spec) | fosite / Okta reuse interval |
 | Refresh opaque + `sha256` at rest; never logged | RFC 9700 / OWASP |
 | Instant revocation (denylist by `fid`/`jti`) | OWASP Session Management |
 | Login throttled + constant-time (no user enumeration) | OWASP ASVS |
@@ -71,6 +71,14 @@ In BFF mode the server can hydrate the authenticated `user` during server render
 | Tokens kept out of the browser; sealed `__Host-` cookie | OAuth 2.0 for Browser-Based Apps |
 | Token responses non-cacheable (`Cache-Control: no-store, private`) | RFC 6749 §5.1 |
 | Reuse/family-revoke emits a security event | RFC 9700 §4.14.2 |
+
+## Known limitations
+
+Two behaviours are accepted trade-offs rather than gaps. Both are bounded, and both are here so you can weigh them yourself rather than discover them.
+
+**The rotation grace window departs from RFC 9700 §4.14.2.** A refresh token replayed *within* `grace_seconds` of a legitimate refresh yields a sibling instead of a family revoke, so a thief winning that race gets a parallel chain that reuse detection won't catch. The alternative — strict invalidate-on-replay — logs out any client with two tabs open. See [the full reasoning](/tokens-and-rotation#a-deliberate-deviation-from-the-spec); [`RefreshFamilyForked`](/events) makes the fork visible.
+
+**Look-alike identifiers share a rate-limit bucket.** The decaying login throttle keys on the identifier normalized (trimmed, lowercased, transliterated), which is many-to-one across distinct accounts — `аdmin@example.com` with a Cyrillic а folds onto `admin@example.com`. Two such accounts can therefore throttle each other for `decay_seconds`. This does **not** affect the [account lockout](/account-lockout), which keys on the resolved user id and so satisfies NIST SP 800-63B §5.2.2's "single account" scoping literally. Keying the throttle the same way would put a user lookup in front of every login attempt, including unauthenticated floods — a worse trade than the one it closes.
 
 ## Security checklist
 

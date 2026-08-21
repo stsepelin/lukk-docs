@@ -31,6 +31,27 @@ The event carries two readonly properties, `$familyId` and `$reason`. The `reaso
 > [!IMPORTANT]
 > The revoke-then-dispatch happens **after** the rotation transaction commits, so the family revocation and the event stay consistent. See [Tokens & Rotation](/tokens-and-rotation) for the reuse-detection mechanics and the grace window that keeps normal concurrency from tripping a false revoke.
 
+### RefreshFamilyForked
+
+The [grace window](/tokens-and-rotation#the-grace-window) tolerates a re-consumption by minting a sibling rather than revoking — that's what stops a multi-tab or SSR client logging itself out. The cost is that a thief who replays *inside* the window gets a sibling too, after which both chains rotate independently and never trip reuse detection.
+
+`Lukk\Events\RefreshFamilyForked` is the signal. It fires when a family carries more live, unrotated tokens than ordinary concurrency explains (`fork_threshold`, default 3 — a browser opening several tabs routinely produces two or three):
+
+```php
+use Illuminate\Support\Facades\Event;
+use Lukk\Events\RefreshFamilyForked;
+
+Event::listen(function (RefreshFamilyForked $event) {
+    Log::warning('Refresh family fan-out', [
+        'user' => $event->userId,
+        'family' => $event->familyId,
+        'live' => $event->liveTokens,
+    ]);
+});
+```
+
+It is **advisory by design**. Revoking automatically on a fork would mean revoking on suspicion — exactly the false logout the grace window exists to prevent — so lukk reports it and leaves the decision to you. A legitimate client settles at two or three siblings; a forked family keeps growing.
+
 ### PasskeyCloneDetected
 
 When [passkeys](/passkeys) are enabled, an assertion whose signature counter *regresses* dispatches `Lukk\Events\PasskeyCloneDetected` — a signal that the authenticator may have been cloned. It's the credential-layer analog of refresh-token family reuse detection; listen to alert and consider disabling the credential:

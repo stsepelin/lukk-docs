@@ -95,6 +95,16 @@ Lukk::rateLimitKeyUsing(fn (Request $request) => 'tenant-'.$request->user()?->te
 
 The value must be something the caller cannot forge — it also buckets the login limiter, so a spoofable header would let an attacker mint a fresh bucket per request. It is used verbatim as part of a cache key, so namespace anything untrusted. Returning an empty value falls back to the address rather than silently putting every caller in one bucket.
 
+### Fork detection
+
+```php
+'fork_threshold' => 3,   // live tokens in one family before RefreshFamilyForked fires
+```
+
+Env: `LUKK_FORK_THRESHOLD`. Minimum 2.
+
+The [grace window](/tokens-and-rotation#the-grace-window) mints a sibling for a concurrent refresh, so a family legitimately carries two or three live tokens. Above this, [`RefreshFamilyForked`](/events) fires. Advisory only — see the event for why lukk doesn't act on it automatically.
+
 ### Denylist
 
 ```php
@@ -105,6 +115,9 @@ The cache store backing the revocation denylist. `null` uses your application's 
 
 > [!IMPORTANT]
 > Across **multiple nodes** this must be a **shared, persistent** store (e.g. Redis) — not the `array` driver and not a per-node cache. The same store also backs the TOTP replay cache and the passkey/2FA throttles; if it isn't shared, a revoked token can still be honored on another node and replay protection isn't authoritative.
+
+> [!WARNING]
+> lukk **refuses to boot in production** on an `array` or `null` cache store. Token revocation, TOTP replay protection and passkey challenges all live here; an array store is per-process, so a revoked token stays valid on every other worker and the single-use guarantees stop being guarantees — silently. Outside production nothing changes, and the array driver stays the right default for a test suite.
 
 ### Output mode
 

@@ -87,6 +87,12 @@ Counters are per [guard](/multiple-guards), so an admin guard and a customer gua
 
 A locked-out user submitting a **recovery code** is not gated by a `two_factor` lock. A recovery code is ~119 bits of entropy, single-use and salted+hashed, so a consecutive cap protects nothing there — while gating it would strand a user whose second factor an attacker deliberately burned. The recovery code is the way *out* of a lock, so it can't be behind one.
 
+### The attempt is consumed before the password is checked
+
+The counter is incremented **before** the credential is verified, then compared against the cap. Reading "is it locked?" and counting afterwards is check-then-act: a burst of concurrent requests all pass the check together and all reach the password comparison, so the real number of verifications is `max_attempts` *plus* however many arrived at once. Reserving first makes the count authoritative at the moment it is taken.
+
+A successful authentication releases the reservation, so the counter still means "consecutive failures" from the outside — a correct password never costs an attempt.
+
 ## What a locked account sees
 
 `423 Locked`, not `429`:

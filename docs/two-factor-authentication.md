@@ -128,6 +128,7 @@ Recovery codes let a user authenticate if they lose their device. Each code work
 - The TOTP secret is stored **encrypted** (it must be reversible to verify codes), while recovery codes are **salted and hashed** and shown only once.
 - A TOTP code cannot be replayed within its 30-second window — accepted codes are cached and rejected on reuse.
 - The verification window is ±1 step and should not be widened (see [Configuration](/configuration#two-factor)).
+- **Re-enrolling over confirmed 2FA is refused** with `409`. Overwriting the secret would null `two_factor_confirmed_at` and silently switch 2FA *off*, so a user who reopened the QR screen and abandoned it would be left unprotected with nothing to notify them. Call `DELETE /auth/two-factor` first — disabling should be deliberate.
 - Challenge codes are throttled per account. With the opt-in [account lockout](/account-lockout) enabled, a run of failed codes also locks the second factor (`423`) — but a **recovery code is never gated by that lock**, so an attacker can't strand a user by burning their TOTP budget.
 
 > [!WARNING]
