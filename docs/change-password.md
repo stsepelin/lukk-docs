@@ -108,6 +108,8 @@ async function submit() {
 | `changePassword(input)` | Sends the change. Rejects with a `LukkError` on failure. |
 | `changing` | `true` while in flight — bind a submit button's `disabled` to it. |
 
+A change made while one is already in flight is **refused without a request** (rejects with `status: 409`). That isn't just bookkeeping for `changing`: the second request would carry a `current_password` the first has already replaced, so lukk reads it as a wrong password and spends one of the account's [consecutive-failure attempts](/account-lockout) — a double-submit would quietly eat the user's lockout budget and report a `422` for a change that had just succeeded.
+
 **Nothing else changes.** lukk keeps this session and revokes the others, so there's no token to swap and no re-login: the user stays where they are, and the other composables' state is already correct. That's why this composable is so small — a client that cleared session state here would log the user out of the tab they just secured.
 
 A `422` carries Laravel's validation bag on `current_password` or `password`, so [`useLukkForm`](/use-lukk-form) maps it onto your fields:
