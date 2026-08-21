@@ -1,5 +1,8 @@
 # Password Reset
 
+> [!TIP]
+> This is the **forgot**-password flow, for a user who can't sign in. A user who *is* signed in and knows their current password should use [Change Password](/change-password) instead — no email round-trip, and it keeps their current session.
+
 lukk ships first-party password reset that fits the stateless-JWT model: a **reset link** the user requests when they're locked out, a page in your SPA that collects the new password, and — by default — a **revoke of every existing session** on success, so a session that predates the reset can't survive it. It's opt-in and rides Laravel's own password broker — there's **no lukk migration**. On the client, `useLukkPasswordReset` owns both steps: requesting the link and submitting the new password.
 
 > [!NOTE]

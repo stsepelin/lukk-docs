@@ -191,6 +191,7 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
 | `passkeys` | `false` | Enable [passkeys](/passkeys). Requires a WebAuthn library. |
 | `email_verification` | `false` | Enable [email verification](/email-verification). |
 | `password_reset` | `false` | Enable [password reset](/password-reset). |
+| `change_password` | **`true`** | Enable [change password](/change-password) (`POST /auth/password`). On by default — it needs no configuration. |
 | `registration` | `false` | Enable [registration](/registration). |
 
 > [!WARNING]
