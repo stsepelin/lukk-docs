@@ -6,11 +6,10 @@ Where **lukk** (the Laravel package) and **lukk-js** (the TypeScript/Nuxt client
 
 ### Planned
 
-Grouped by theme; likely order: change password → abilities/scopes → account deletion → impersonation → personal access tokens.
+Grouped by theme; likely order: abilities/scopes → account deletion → impersonation → personal access tokens.
 
 **Account & identity management** — the remaining [Fortify](https://laravel.com/docs/fortify)-parity flows for a signed-in user.
 
-- **Change password (while authenticated)** — rotate a password without the forgot-password email round-trip. An authenticated `POST /auth/password` that re-verifies the current password (constant-time), validates the new one (`confirmed` + `Password::defaults()`), revokes the user's *other* sessions while keeping the current one, and fires a `PasswordChanged` event. (A profile / email update endpoint is its natural sibling — an email change should re-trigger verification.)
 - **Account deletion & GDPR** — the right to erasure (plus data export). A step-up-confirmed `DELETE /auth/account` that re-verifies identity, revokes all sessions, cascades lukk's own auth artifacts (refresh families, passkeys, 2FA secret + recovery codes), and fires `AccountDeleting` / `AccountDeleted` so the app can erase or anonymize *its* domain data (lukk owns only the auth side).
 
 **Authorization in the token**
@@ -33,6 +32,7 @@ Grouped by theme; likely order: change password → abilities/scopes → account
 - **Configurable login identifier** — `lukk.username` (default `email`); login by any unique column.
 - **[Account lockout](/account-lockout)** *(opt-in)* — a persistent cap on **consecutive** failed attempts (NIST SP 800-63B §5.2.2), covering password login, the two-factor challenge and step-up confirmation; `423`, an operator release command, and lock/release events. Off by default: a hard lockout is a denial-of-service primitive.
 - **Throttle identity** — every limit keys on `Lukk::rateLimitKey()`, with IPv6 collapsed to a configurable prefix (default `/64`) and `Lukk::rateLimitKeyUsing()` to replace the identity wholesale.
+- **[Change password](/change-password)** — an authenticated `POST /auth/password` that re-verifies the current password, revokes every other session, and fires `PasswordChanged`.
 - **[Two-factor (TOTP)](/two-factor-authentication)** — enrol, confirm, challenge at login, single-use recovery codes (+ remaining count), disable.
 - **[Passkeys (WebAuthn)](/passkeys)** — register, passwordless login, list, remove.
 - **[Step-up confirmation](/confirmation)** — "sudo" re-auth (password or passkey) gating sensitive routes via `lukk.confirm`.
