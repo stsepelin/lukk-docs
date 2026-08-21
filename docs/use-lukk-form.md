@@ -10,6 +10,11 @@ const form = useLukkForm(initialData, options?)
 
 `useLukkForm` returns a single reactive object. The **fields live under `form.data`** (not spread onto the form itself), so a field may safely be named `errors`, `processing`, or `submit`. Every `useLukkForm()` call is an independent form.
 
+> [!IMPORTANT]
+> **URLs resolve against your app's API base**, not lukk's auth base — `api.target` in `direct` mode, the [proxy mount](/transport-modes#bff) in `bff` mode. `form.post('/register')` reaches **your** `/register`, not lukk's `POST /auth/register`.
+>
+> That's the intended split: `useLukkForm` and [`useLukkFetch`](/use-lukk-fetch) are for endpoints you own; lukk's own auth endpoints are reached through the composables ([`useLukkAuth`](/authentication#uselukkauth), [`useLukkChangePassword`](/change-password), and friends), which hold the right base. To show a lukk `422` on your fields, catch the `LukkError` and read its `errors` bag — see [Change Password](/change-password#showing-validation-errors) for the pattern.
+
 ```ts
 const form = useLukkForm({ email: '', password: '' })
 
@@ -45,7 +50,7 @@ const form = useLukkForm({ email: '', password: '' })
 
 async function register() {
   try {
-    await form.post('/register')     // form.data is sent as the body
+    await form.post('/register')     // YOUR route — see the note above
     await navigateTo('/dashboard')
   }
   catch {
@@ -206,7 +211,7 @@ const form = useLukkForm({ password: '', password_confirmation: '' })
 
 form.transform((data) => ({ password: data.password })) // send only `password`
 
-await form.post('/password') // body is { password: '…' }
+await form.post('/password') // YOUR route — not lukk's POST /auth/password
 ```
 
 ## File Uploads

@@ -112,17 +112,30 @@ A change made while one is already in flight is **refused without a request** (r
 
 **Nothing else changes.** lukk keeps this session and revokes the others, so there's no token to swap and no re-login: the user stays where they are, and the other composables' state is already correct. That's why this composable is so small — a client that cleared session state here would log the user out of the tab they just secured.
 
-A `422` carries Laravel's validation bag on `current_password` or `password`, so [`useLukkForm`](/use-lukk-form) maps it onto your fields:
+### Showing validation errors
+
+A `422` rejects with a `LukkError` carrying Laravel's bag, keyed by field:
 
 ```ts
-const form = useLukkForm({
-  current_password: '',
-  password: '',
-  password_confirmation: '',
-})
+import type { LukkError } from 'lukk-core'
 
-await form.post('/password') // errors land on form.errors.current_password, etc.
+const errors = ref<Record<string, string>>({})
+
+async function submit() {
+  errors.value = {}
+  try {
+    await changePassword({ /* … */ })
+  }
+  catch (e) {
+    const bag = (e as LukkError).errors
+    // `current_password` for a wrong password; `password` for a rule failure.
+    if (bag) errors.value = Object.fromEntries(Object.entries(bag).map(([k, v]) => [k, v[0]!]))
+  }
+}
 ```
+
+> [!NOTE]
+> **[`useLukkForm`](/use-lukk-form) can't post here.** Its URLs resolve against your **app's** API base (`api.target`, or the proxy mount in BFF mode) — not lukk's auth base — so `form.post('/password')` would reach *your* `/password` route, not lukk's. That's by design: `useLukkForm` is for your own endpoints. lukk's auth endpoints are reached through the composables, which hold the right base.
 
 In BFF mode the request goes through the proxy, so the browser still never holds a token.
 
