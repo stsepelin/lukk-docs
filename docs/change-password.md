@@ -53,11 +53,15 @@ Changing a password is what someone does when they suspect another party is in t
 
 The session to keep is read from the caller's **own verified token**, not from the request body — so it can't be pointed at someone else's session to spare it from the sweep. Revocation goes through the denylist first, so the other sessions' access tokens stop working immediately rather than at the end of their TTL.
 
+One edge worth knowing: a token carrying no `fid` — one minted by a co-issuer sharing your secret, in the [verify-only topology](/deployment#splitting-auth-and-api) — identifies no session here to preserve, so **every** session is revoked rather than none. Returning success while silently skipping the sweep would be the worse answer.
+
 ### Throttling
 
 It runs on the **same budget as [step-up confirmation](/confirmation)** — the `lukk-confirm` limiter (`rate_limits.confirm`, default 5/60s) and, when [`features.lockout`](/account-lockout) is on, the same `confirm` counter.
 
-That's deliberate. Both endpoints verify the same secret, so giving each its own allowance would simply mean twice as many guesses at one password. A success clears the lockout counter, since those failures were against a password that no longer exists.
+That's deliberate. Both endpoints verify the same secret, so giving each its own allowance would simply mean twice as many guesses at one password.
+
+A success clears **both** the `confirm` and the `login` counters. The failures they hold were against a password that no longer exists — and without releasing `login`, a user who was being brute-forced, noticed, and changed their password would still be locked out of login on every other device, with a password reset as the only way back.
 
 ### The event
 
@@ -85,21 +89,39 @@ On by default, like `logout_all`: it needs no configuration, and refusing a sign
 
 ## Client (Nuxt)
 
-Not yet wired into `lukk-nuxt`'s composables. Call it with [`useLukkFetch`](/use-lukk-fetch) in the meantime — it attaches credentials and handles the refresh:
+### `useLukkChangePassword`
 
 ```ts
-const api = useLukkFetch()
+const { changing, changePassword } = useLukkChangePassword()
 
-await api('/password', {
-  method: 'POST',
-  body: {
+async function submit() {
+  await changePassword({
     current_password: current.value,
     password: next.value,
     password_confirmation: confirm.value,
-  },
-})
+  })
+}
 ```
 
-In BFF mode that path goes through the proxy, so the browser still never holds a token. A `422` carries Laravel's validation bag, so [`useLukkForm`](/use-lukk-form) maps the errors onto your fields for free.
+| | |
+|---|---|
+| `changePassword(input)` | Sends the change. Rejects with a `LukkError` on failure. |
+| `changing` | `true` while in flight — bind a submit button's `disabled` to it. |
+
+**Nothing else changes.** lukk keeps this session and revokes the others, so there's no token to swap and no re-login: the user stays where they are, and the other composables' state is already correct. That's why this composable is so small — a client that cleared session state here would log the user out of the tab they just secured.
+
+A `422` carries Laravel's validation bag on `current_password` or `password`, so [`useLukkForm`](/use-lukk-form) maps it onto your fields:
+
+```ts
+const form = useLukkForm({
+  current_password: '',
+  password: '',
+  password_confirmation: '',
+})
+
+await form.post('/password') // errors land on form.errors.current_password, etc.
+```
+
+In BFF mode the request goes through the proxy, so the browser still never holds a token.
 
 Next: **[Step-Up Confirmation](/confirmation)**
