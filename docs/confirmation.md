@@ -116,6 +116,8 @@ Where the token lives depends on the [mode](/transport-modes):
 - **`direct`** — the token is stored in client state and the client attaches the header.
 - **`bff`** — the proxy strips the token from the response and **holds it server-side**, injecting the header itself. The browser only sees `confirmed` flip to `true`; it never holds the confirmation credential.
 
+In `bff` mode this covers **both** proxies: the lukk auth routes *and* your own API through the [app-API proxy](/configuration#api-bff-app-api-proxy). So a route on your Laravel API gated with lukk's `lukk.confirm` middleware works through `useLukkFetch()` once `confirmed` is `true` — the token is injected from the sealed session, and a confirmation header sent by the browser is discarded rather than forwarded.
+
 ```mermaid
 sequenceDiagram
     participant App
