@@ -85,6 +85,21 @@ Event::listen(function (AccountLocked $event) {
 
 `AccountLocked` fires **once, on the transition**, and it is the only signal a locked-out user's account gets — so it's where you'd send the "someone is trying to get into your account" mail. Note that `$subject` is a submitted identifier, not a resolved user: it need not name a real account, so rate-limit anything you send off it.
 
+### PasswordChanged
+
+`Lukk\Events\PasswordChanged` fires when a signed-in user changes their own password via [change password](/change-password), having proven the current one. It carries `$user` — unlike the reset flow, there is always a resolved one.
+
+```php
+use Illuminate\Support\Facades\Event;
+use Lukk\Events\PasswordChanged;
+
+Event::listen(function (PasswordChanged $event) {
+    $event->user->notify(new YourPasswordWasChanged);
+});
+```
+
+Deliberately distinct from Laravel's `Illuminate\Auth\Events\PasswordReset` in the table below, which fires for the forgot-password flow. Both are worth reacting to, but they mean different things: one proves control of the email address, the other proves knowledge of the existing password. Users read *"your password was reset"* and *"your password was changed"* very differently — and an unexpected one of either is how account takeover gets noticed, which is why this sits with the security events rather than as a bare row.
+
 ## Framework events
 
 lukk also dispatches standard Laravel auth events, so your existing listeners work unchanged:
@@ -95,7 +110,6 @@ lukk also dispatches standard Laravel auth events, so your existing listeners wo
 | `Illuminate\Auth\Events\Registered` | A user completes [registration](/registration). |
 | `Illuminate\Auth\Events\Verified` | A user completes [email verification](/email-verification). |
 | `Illuminate\Auth\Events\PasswordReset` | A user completes a [password reset](/password-reset). |
-| `Lukk\Events\PasswordChanged` | A signed-in user changed their own password via [change password](/change-password), having proven the current one. Carries `$user`. |
 
 Login is constant-time by design (an unknown email runs the same hashing work as a wrong password), and every token-bearing response is sent `Cache-Control: no-store` — both are part of the security contract covered in [Security](/security).
 
