@@ -64,6 +64,7 @@ export default withMermaid({
           { text: 'Step-Up Confirmation', link: '/confirmation' },
           { text: 'Account Lockout', link: '/account-lockout' },
           { text: 'Abilities (Scopes)', link: '/abilities' },
+          { text: 'Account Deletion & Export', link: '/account-deletion' },
           { text: 'Multiple Guards', link: '/multiple-guards' },
         ],
       },

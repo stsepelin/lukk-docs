@@ -174,12 +174,22 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
     'two_factor' => false,
     'lockout' => false,
     'change_password' => true,
+    'account_deletion' => true,
     'passkeys' => false,
     'email_verification' => false,
     'password_reset' => false,
     'registration' => false,
+    'abilities' => false,
+    'gate_auth_routes' => true,
 ],
 ```
+
+Three of these default **on** and are worth knowing about: `change_password` and `account_deletion`
+add routes (`account_deletion` an irreversible one — see [Account Deletion](/account-deletion)), and
+`gate_auth_routes` stops a [pinned token](/abilities#lukk-s-own-routes) reaching lukk's own
+session-management and account-security routes. `abilities` only matters for an install whose grants
+come solely from pinned sessions; configuring `Lukk::abilitiesUsing()` turns the feature on by
+itself.
 
 | Feature | Default | Description |
 |---|---|---|
