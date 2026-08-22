@@ -63,6 +63,7 @@ export default withMermaid({
           { text: 'Change Password', link: '/change-password' },
           { text: 'Step-Up Confirmation', link: '/confirmation' },
           { text: 'Account Lockout', link: '/account-lockout' },
+          { text: 'Abilities (Scopes)', link: '/abilities' },
           { text: 'Multiple Guards', link: '/multiple-guards' },
         ],
       },
