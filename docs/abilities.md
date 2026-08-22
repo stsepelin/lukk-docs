@@ -164,6 +164,10 @@ const { can, cannot, canAny, canAll, enforced } = useLukkAbilities()
 > [!WARNING]
 > **These are UI hints, never enforcement.** The server gates every request on the token itself; this only lets you avoid rendering a button that comes back 403. A client-side check is one devtools console away from being true.
 
+The list follows a refreshed token: a rotation re-derives the grant server-side, so the client
+reloads the user when one lands. That costs one request per refresh, and only for apps whose user
+resource actually publishes `abilities`.
+
 **Absent and empty mean different things.** No `abilities` key means "this server doesn't use abilities" and `can()` returns `true` — so an app that upgrades without opting in doesn't find its UI blanked. An empty array means "in use, and this token was granted nothing", and `can()` returns `false`. `enforced` tells the two apart. A malformed value fails closed, and a logged-out visitor is granted nothing.
 
 The client matcher mirrors the server's rules exactly, and lukk's conformance suite runs both against the same gates on a live instance and requires them to agree, so the two cannot drift.
