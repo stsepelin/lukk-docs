@@ -6,19 +6,15 @@ Where **lukk** (the Laravel package) and **lukk-js** (the TypeScript/Nuxt client
 
 ### Planned
 
-Grouped by theme; likely order: abilities/scopes → account deletion → impersonation → personal access tokens.
+Grouped by theme; likely order: account deletion → impersonation → personal access tokens.
 
 **Account & identity management** — the remaining [Fortify](https://laravel.com/docs/fortify)-parity flows for a signed-in user.
 
 - **Account deletion & GDPR** — the right to erasure (plus data export). A step-up-confirmed `DELETE /auth/account` that re-verifies identity, revokes all sessions, cascades lukk's own auth artifacts (refresh families, passkeys, 2FA secret + recovery codes), and fires `AccountDeleting` / `AccountDeleted` so the app can erase or anonymize *its* domain data (lukk owns only the auth side).
 
-**Authorization in the token**
-
-- **Abilities / scopes** — coarse, **stateless** authorization carried in the access token ("this token may do `orders.read`"), à la [Sanctum](https://laravel.com/docs/sanctum) abilities. A `scope` claim minted per session, an enforcing route middleware (`lukk.ability:orders.read`), and helpers (`$user->tokenCan(...)`). Already possible via `Lukk::tokenClaimsUsing()`; this makes it first-class. Trade-off: a JWT-baked scope is immutable until the token expires (short TTL mitigates; the denylist can hard-kill a family) — and it stays *coarse*, never a substitute for per-object authorization (OWASP API1 BOLA, which is the app's Policies/Gates).
-
 **Delegated & machine access**
 
-- **Personal access tokens** *(needs design)* — long-lived, named, individually-revocable API keys for scripts / CI / machine-to-machine (the one Sanctum use case lukk doesn't cover). Open fork: opaque DB tokens (Sanctum-style, but a *stateful* model in a stateless-JWT package) vs. long-lived scoped JWTs revoked via the denylist (fits the architecture). Depends on abilities/scopes.
+- **Personal access tokens** *(needs design)* — long-lived, named, individually-revocable API keys for scripts / CI / machine-to-machine (the one Sanctum use case lukk doesn't cover). Open fork: opaque DB tokens (Sanctum-style, but a *stateful* model in a stateless-JWT package) vs. long-lived scoped JWTs revoked via the denylist (fits the architecture). [Abilities](/abilities) now supply the missing half — a **pinned** grant is a fixed, per-token set of permissions that survives rotation — so what remains is naming, listing and individual revocation.
 
 **Administration & support**
 
@@ -27,6 +23,7 @@ Grouped by theme; likely order: abilities/scopes → account deletion → impers
 ### Shipped
 
 - **JWT session authentication** — short-lived HS256 access tokens + opaque **rotating refresh tokens** with reuse detection, a concurrency grace window, and a cache-backed denylist. Login (constant-time, per-account + per-IP throttled), refresh, logout, logout-all, and revoke-other-sessions.
+- **[Abilities / scopes](/abilities)** — coarse, stateless authorization in the `scope` claim (RFC 6749 / RFC 9068), `lukk.ability:` / `lukk.abilities:` route gates, `$user->tokenCan()`, and **pinned** grants a token owns for its lifetime. Deny by default, inert until configured.
 - **[Multiple guards](/multiple-guards)** — per-guard cryptographic token identity, guard-scoped refresh/revocation/throttling, per-guard routes (path or subdomain), boot-time isolation guardrails.
 - **[Registration](/registration)** — `POST /auth/register` mirroring login, fully customizable, with an auto-login toggle.
 - **Configurable login identifier** — `lukk.username` (default `email`); login by any unique column.
