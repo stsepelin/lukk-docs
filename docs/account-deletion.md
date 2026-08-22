@@ -95,6 +95,16 @@ the identifier — keep it out of logs.
 > design, so a failure can't leave an account half-erased and still usable. The subject keeps their
 > account and has to log in again.
 
+> [!NOTE]
+> **The all-or-nothing guarantee is per database connection.** SQL has no cross-connection
+> transaction without two-phase commit, so if your user model lives on a different connection than
+> lukk's tables — identities in a shared directory database, application tables local — each gets its
+> own transaction. lukk gives the user's connection one of its own, so anything that *throws* during
+> erasure still rolls both back. What can't be covered is a failure during the commit itself, which
+> can leave the user erased and lukk's rows restored. That's the direction lukk prefers anyway (the
+> account is unreachable rather than half-erased and still usable), and `lukk:prune` sweeps what's
+> left, but it isn't all-or-nothing and this page won't claim it is.
+
 > [!CAUTION]
 > **Listen to `AccountDeleting` synchronously.** A `ShouldQueue` listener is pushed when the event is
 > dispatched, not when the transaction commits (Laravel's `after_commit` is off by default) — so its
