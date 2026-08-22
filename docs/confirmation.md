@@ -11,7 +11,7 @@ Some actions are sensitive enough that a valid session isn't sufficient — chan
 
 1. The user re-confirms with a **password** or a **passkey** and receives a short-lived `confirmation_token`.
 2. The client sends that token in a request header (default `X-Lukk-Confirmation`) on subsequent sensitive requests.
-3. The `lukk.confirm` middleware checks for a valid, fresh token. If it is missing or expired, the route returns **423 Locked**.
+3. The `lukk.confirm` middleware checks for a valid, fresh token **earned by the session presenting it**. If it is missing, expired, or belongs to another session, the route returns **423 Locked**.
 
 The window length is `confirm.ttl` (default 5 minutes). lukk's own [two-factor](/two-factor-authentication) and [passkey](/passkeys) management routes are protected this way.
 
@@ -21,12 +21,34 @@ sequenceDiagram
     participant API as lukk API
 
     App->>API: POST /auth/confirm-password { password }<br/>Authorization: Bearer access
-    API-->>App: 200 { confirmation_token } (~5 min, bound to this user)
+    API-->>App: 200 { confirmation_token } (~5 min, bound to THIS session)
     App->>API: DELETE /auth/two-factor<br/>Bearer access + X-Lukk-Confirmation: token
-    Note over API: lukk.confirm verifies the token<br/>(fresh + subject == current user)
+    Note over API: lukk.confirm verifies the token<br/>fresh, right subject, and earned by this session
     API-->>App: 204 — sensitive action allowed
     Note over App: without a valid confirmation header → 423 Locked
 ```
+
+### Bound to the session that earned it
+
+A confirmation carries the identity of the refresh-token **family** that re-verified the credential, and `lukk.confirm` refuses one presented by a different session:
+
+```json
+// 423 Locked
+{
+  "message": "This confirmation belongs to a different session.",
+  "reason": "confirmation_session_mismatch"
+}
+```
+
+The `reason` key exists so a client can tell the two 423s apart. The plain "requires confirmation" 423 carries none and means *earn one*. This one means *discard the one you are holding and earn another* — matching on the English prose would be a drift surface of its own.
+
+A step-up asserts "the person at this keyboard re-proved themselves just now". Bound to the subject alone it was instead bearer authority across **every** token that user held — so a machine token with a [pinned grant](/abilities), which can never earn a confirmation itself because the earning routes are ability-gated, could present the one the user's browser earned and act with it.
+
+**Rotation does not invalidate it.** The binding is to the family, not to an individual access token, and a family survives refresh — so a token rotating mid-window keeps its confirmation. [BFF mode](/transport-modes#bff) is unaffected for the same reason. A *new login* does start a new family, and the BFF discards the stored confirmation when it captures a new token pair.
+
+::: tip Verify-only and co-issuer topologies
+Matching is strict, which is what keeps a [co-issuer](/deployment#splitting-auth-and-api) working: a token minted by another service sharing the secret carries no family, and neither does a confirmation earned by it, so the two still match. What is refused is an *unbound* confirmation presented by a token that does have a family.
+:::
 
 ### Earning confirmation
 

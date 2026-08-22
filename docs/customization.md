@@ -115,6 +115,14 @@ The cryptographic and revocation seams are contracts too. Rebind `Contracts\Toke
 | `WebAuthnCeremony` | `SpomkyWebAuthnCeremony` | Performs WebAuthn registration/assertion. |
 | `PasskeyRepository` | `DatabasePasskeyRepository` | Persists passkey credentials. |
 
+::: warning Replacing `PasskeyRepository` or `RefreshTokenRepository` under multiple guards
+Both are **guard-scoped**: an account is `(guard, id)`, not `id`, because [providers are separate tables](/multiple-guards) where `users.id === admins.id` is the ordinary case. Every method must honour that — including `findByCredentialId`, which takes a credential id and *no* user and is therefore the authentication decision itself.
+
+The single exception is `PasskeyRepository::existsByCredentialId()`, which must be **unscoped**. `credential_id` is globally unique (WebAuthn requires it), so registration has to ask whether *any* guard holds an id before writing one; asking the scoped question instead lets a cross-guard duplicate reach the database constraint as a `500` rather than a clean validation error.
+
+Bind a replacement with `bind`, not `singleton` — the active guard is per-request, and a memoized instance carries the previous request's guard into the next one.
+:::
+
 That's the whole customization surface. For the design rationale behind these seams, see [Architecture](/architecture); for the events lukk fires at the security-relevant moments, see [Events](/events). Questions or contributions are welcome on the [lukk](https://github.com/stsepelin/lukk) and [lukk-js](https://github.com/stsepelin/lukk-js) repositories.
 
 ## `Lukk::rateLimitKeyUsing()`

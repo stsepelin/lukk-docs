@@ -86,6 +86,8 @@ Protect admin routes with `auth:admin`; they resolve against the `admins` table 
 - **Token identity.** A token minted for `admin` is rejected by the `users` guard on the **audience** check — and the **signature** too, if you gave it a separate secret. The rejection happens *before* the user is resolved, so it can never look up the wrong table.
 - **Refresh + revocation.** Refresh-token families are scoped by a `guard` column. Rotating an admin refresh token on the users refresh endpoint fails (not found); `revokeAllSessions()` on `admin` id `5` leaves the users guard's id `5` sessions **untouched**.
 - **Revocation can't cross.** The denylist is shared but keyed by `jti`/`fid` (UUIDs), so admin revocation only evicts admin families — a user's tokens are a different family and are never affected.
+- **[Passkeys](/passkeys) are guard-scoped too** (a `guard` column, as of `0.6.0`). This one matters most: the assertion lookup takes a credential id and *no* user, so it is the authentication decision itself — unscoped, an admin's authenticator resolved on the users guard. It also keeps [erasure and export](/account-deletion) off a colliding account's credentials. Registering a credential for a non-default guard outside lukk's own routes must set the active guard first (`Lukk::useGuard('admin')`), or the row lands on the wrong one.
+- **[Lockout](/account-lockout) counters** are guard-scoped, so a flood against one guard's login can't lock a colliding account out of another.
 
 ### Separate keys vs. a shared secret
 

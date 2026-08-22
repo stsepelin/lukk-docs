@@ -6,11 +6,7 @@ Where **lukk** (the Laravel package) and **lukk-js** (the TypeScript/Nuxt client
 
 ### Planned
 
-Grouped by theme; likely order: account deletion → impersonation → personal access tokens.
-
-**Account & identity management** — the remaining [Fortify](https://laravel.com/docs/fortify)-parity flows for a signed-in user.
-
-- **Account deletion & GDPR** — the right to erasure (plus data export). A step-up-confirmed `DELETE /auth/account` that re-verifies identity, revokes all sessions, cascades lukk's own auth artifacts (refresh families, passkeys, 2FA secret + recovery codes), and fires `AccountDeleting` / `AccountDeleted` so the app can erase or anonymize *its* domain data (lukk owns only the auth side).
+Grouped by theme; likely order: impersonation → personal access tokens.
 
 **Delegated & machine access**
 
@@ -23,6 +19,7 @@ Grouped by theme; likely order: account deletion → impersonation → personal 
 ### Shipped
 
 - **JWT session authentication** — short-lived HS256 access tokens + opaque **rotating refresh tokens** with reuse detection, a concurrency grace window, and a cache-backed denylist. Login (constant-time, per-account + per-IP throttled), refresh, logout, logout-all, and revoke-other-sessions.
+- **[Account deletion & export](/account-deletion)** — step-up-confirmed `DELETE /auth/account` (GDPR Art. 17) and `GET /auth/account/export` (Art. 15/20). Revokes every session, erases lukk's artifacts including the identifier-keyed lockout counters, and fires `AccountDeleting` / `AccountDeleted` so the app erases its own. `Lukk::deleteUserUsing()` to anonymize instead.
 - **[Abilities / scopes](/abilities)** — coarse, stateless authorization in the `scope` claim (RFC 6749 / RFC 9068), `lukk.ability:` / `lukk.abilities:` route gates, `$user->tokenCan()`, and **pinned** grants a token owns for its lifetime. Deny by default, inert until configured.
 - **[Multiple guards](/multiple-guards)** — per-guard cryptographic token identity, guard-scoped refresh/revocation/throttling, per-guard routes (path or subdomain), boot-time isolation guardrails.
 - **[Registration](/registration)** — `POST /auth/register` mirroring login, fully customizable, with an auto-login toggle.

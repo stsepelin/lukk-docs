@@ -112,7 +112,8 @@ When your front-end and API live on different subdomains (`app.example.com` and 
 - A regressing signature counter is rejected and dispatches `Events\PasskeyCloneDetected`, but a `0` counter is never flagged — synced passkeys (iCloud, Google, 1Password) always report `0`.
 - `rp_id` and `origins` are **required** when passkeys are enabled — lukk throws on an empty value rather than fall back to a weak default.
 - By default lukk **requires user verification** (`user_verification` → `required`) — the authenticator must verify the user (biometric/PIN), not just their presence. Passwordless login and `confirm-passkey` step-up are single-factor (possession), so enforcing UV makes them phishing-resistant, AAL2-style. Lower it to `preferred` only if you must support authenticators that can't verify the user (see [Configuration](/configuration#passkeys)).
-- Passkey storage sits behind `Contracts\PasskeyRepository` (`passkeys` table) and is swappable.
+- Passkey storage sits behind `Contracts\PasskeyRepository` (`passkeys` table) and is swappable — see the [note on replacing it](/customization) under multiple guards.
+- Credentials are **scoped to a guard** (a `guard` column, as of `0.6.0`). Under [multiple guards](/multiple-guards) the assertion lookup takes a credential id and no user, so without scoping an admin's authenticator could resolve on the users guard. Single-guard installs are unaffected and the column stays null.
 
 > [!WARNING]
 > Passkeys are only as phishing-resistant as your weakest fallback. In lukk's default model, password login is always available — so deleting all passkeys can never lock a user out. For a **passwordless-only** deployment, guard the last credential at your application layer and ensure any recovery path is itself phishing-resistant; otherwise an attacker can downgrade to the weaker method.

@@ -197,4 +197,4 @@ Configuring `abilitiesUsing` turns abilities on by itself, so most installs neve
 
 Without it lukk cannot distinguish a token pinned to *nothing* from a server that doesn't use abilities, and a client would render the full privileged UI for the most restricted token you can issue.
 
-Next: **[Multiple Guards](/multiple-guards)**
+Next: **[Account Deletion & Export](/account-deletion)**

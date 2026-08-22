@@ -23,9 +23,25 @@ impact tags. Read it (and the changelog) before bumping:
 ## Highest-impact change right now
 
 > [!WARNING]
-> **lukk `0.4.0` adds a `guard` column to `refresh_tokens`** (for [multiple guards](/multiple-guards)).
-> It's folded into the core migration, so **fresh installs and single-guard apps need no action**.
-> Only a **pre-release install that already ran the old migration** must add the column by hand —
-> see [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md#upgrading-to-040-from-03x).
+> **lukk `0.6.0` adds a `guard` column to `passkeys`** and turns **account deletion on by default**.
+>
+> The column is folded into the existing passkeys migration, so a **fresh install needs no action**
+> and a **single-guard install is unaffected** (the column stays null and no query names it). An
+> install that already ran that migration **and** uses [multiple guards](/multiple-guards) must add
+> the column and **backfill it** — until it does, `lukk:prune` deliberately sweeps no passkeys at
+> all rather than risk deleting a credential it cannot attribute.
+>
+> Removing a guard needs the *opposite* cleanup, and it fails **open**: rows still stamped with the
+> departed guard's name become visible to the default guard, and for passkeys that lookup is the
+> authentication decision. Delete or re-home them first.
+>
+> `features.account_deletion` defaults to `true`, so upgrading **adds an irreversible route**
+> (`DELETE /auth/account`). Turn it off if deletion is owned elsewhere. Both directions and the SQL
+> are in [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md#upgrading-to-060-from-05x).
+
+> [!NOTE]
+> **lukk `0.4.0` added a `guard` column to `refresh_tokens`** on the same terms — folded into the
+> core migration, no action for fresh or single-guard installs, and the identical backfill caveat in
+> both directions. See [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md#upgrading-to-040-from-03x).
 
 lukk-js has shipped **no breaking changes yet** — every release has been additive.
