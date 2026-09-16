@@ -239,7 +239,7 @@ sequenceDiagram
     end
 ```
 
-You don't normally call `initSession()` yourself — the plugin does. It's exposed for tests and custom boot flows.
+You don't normally call `initSession()` yourself — the plugin does. It's exposed for tests, custom boot flows, and [retrying a restore that couldn't reach the server](#when-the-restore-can-t-reach-an-answer).
 
 ### Waiting for the session (`ready`)
 
@@ -268,7 +268,7 @@ It is `false`:
 - **In a plugin that runs before lukk's `lukk:session-restore`** — see [Waiting from a plugin or a store](#waiting-from-a-plugin-or-a-store).
 
 > [!WARNING]
-> **Reading `ready` or `restoreFailed` in a template causes a hydration mismatch** on a server-rendered page the server didn't hydrate a user for — including every anonymous visit. The server renders `false`, and the client sets its answer before mounting. Use them in logic (middleware, handlers, `onMounted`), or put the markup that depends on them inside `<ClientOnly>`. `loggedIn` has always behaved the same way for a session restored on the client.
+> **Reading `ready` in a template causes a hydration mismatch** on a server-rendered page the server didn't hydrate a user for — including every anonymous visit. The server renders `false`, and the client sets `true` before mounting. `restoreFailed` does the same whenever the client restore fails. Use them in logic (middleware, handlers, `onMounted`), or put the markup that depends on them inside `<ClientOnly>`. `loggedIn` has always behaved the same way for a session restored on the client.
 
 #### Loading account data
 
@@ -288,7 +288,7 @@ When the server hydrated the user, it fetches as usual and the page renders with
 
 #### Restoring a deep link
 
-In `onMounted` the restore has already finished, so `loggedIn` is a real answer:
+In `onMounted` the restore has already finished. `loggedIn` is a real answer unless `restoreFailed` says the restore couldn't reach the server — send that visitor to `/login` and a signed-in user is asked to log in again:
 
 ```vue
 <script setup lang="ts">
@@ -296,10 +296,11 @@ interface Order { id: string, total: number }
 
 const route = useRoute()
 const api = useLukkFetch()
-const { loggedIn } = useLukkAuth()
+const { loggedIn, restoreFailed } = useLukkAuth()
 const order = ref<Order | null>(null)
 
 onMounted(async () => {
+  if (restoreFailed.value) return // show a retry instead — see below
   if (!loggedIn.value) {
     return navigateTo({ path: '/login', query: { redirect: route.fullPath } })
   }
@@ -315,11 +316,25 @@ onMounted(async () => {
 ```
 
 > [!WARNING]
-> **Validate the `redirect` parameter where you read it.** `route.fullPath` is always a local path, but your login page receives whatever is in the URL. Only follow a same-origin path — one that starts with `/` and not `//` or `/\`, which browsers treat as another host:
+> **Validate the `redirect` parameter where you read it.** `route.fullPath` is always a local path, but your login page receives whatever is in the URL. A pattern check on the raw string isn't enough: the URL parser strips tabs and newlines and resolves dot segments, so `/\t/evil.com` and `/.//evil.com` pass a "starts with `/` but not `//`" test and still lead off-site. Parse it the way the browser will, then check the result:
 >
 > ```ts
-> const target = String(route.query.redirect ?? '/')
-> await navigateTo(/^\/(?![/\\])/.test(target) ? target : '/')
+> function safeRedirect(raw: unknown, fallback = '/'): string {
+>   if (typeof raw !== 'string' || !raw.startsWith('/')) return fallback
+>
+>   let url: URL
+>   try { url = new URL(raw, 'http://local.invalid') }
+>   catch { return fallback }
+>
+>   // A different origin means the string named another host.
+>   if (url.origin !== 'http://local.invalid') return fallback
+>
+>   // Rebuild from the parsed parts, and refuse a path that would read as protocol-relative.
+>   const path = url.pathname + url.search + url.hash
+>   return /^\/[/\\]/.test(path) ? fallback : path
+> }
+>
+> await navigateTo(safeRedirect(route.query.redirect))
 > ```
 
 #### Waiting from a plugin or a store
@@ -339,9 +354,12 @@ export async function loadPreferences() {
 }
 ```
 
-Plugins run one after another. A plugin that **awaits** `whenReady()` in its setup and runs *before* `lukk:session-restore` — `enforce: 'pre'`, or one added by a module listed after `lukk-nuxt` — waits on a plugin that can't start until it finishes, and the app never boots. Declare the dependency; in development lukk-nuxt warns when this happens:
+Plugins run one after another. A plugin that **awaits** `whenReady()` in its setup and runs *before* `lukk:session-restore` — `enforce: 'pre'`, or one added by a module listed after `lukk-nuxt` — waits on a plugin that can't start until it finishes, and the app never boots. Depending on `lukk:client` doesn't fix that. Depend on the restore plugin by name, **in a `.client.ts` file**: the restore only runs in the browser, so a universal plugin naming it is reported — a build error on Nuxt 3, a development warning on Nuxt 4.
+
+In development lukk-nuxt warns when `whenReady()` is called before the restore has started. The same call is harmless when it isn't awaited in a plugin's setup, so treat the warning as "check this", not as a failure.
 
 ```ts
+// plugins/preferences.client.ts
 export default defineNuxtPlugin({
   name: 'preferences',
   dependsOn: ['lukk:session-restore'],
@@ -352,7 +370,7 @@ export default defineNuxtPlugin({
 ```
 
 > [!WARNING]
-> **`whenReady()` resolves immediately on the server**, even when `ready` is `false`. Every plugin has already run by then, and nothing later in the request can resolve the session — waiting would hang the render. Read `ready` afterwards in code that also runs on the server.
+> **`whenReady()` resolves immediately on the server**, even when `ready` is `false`. The client restore never runs there, so a render the server didn't hydrate would wait forever. Read `ready` afterwards in code that also runs on the server: `false` means "not known here", not "anonymous".
 
 #### In route middleware
 
@@ -405,20 +423,26 @@ async function retry() {
 </template>
 ```
 
-`initSession()` is the retry: it uses the same single refresh as the automatic restore, so it can't race a request's own refresh. `restoreFailed` is cleared by any definitive answer — a user loaded, a `401`/`403`, or `logout()` — and a `logout()` that happens while a restore is still in flight wins over that restore's result. It survives `clearNuxtState()`.
+`initSession()` is the retry: it uses the same single refresh as the automatic restore, so it can't race a request's own refresh. `restoreFailed` is cleared by any definitive answer — a user loaded, a `401`/`403`, a sign-in, or `logout()`. Unlike `ready`, it doesn't survive `clearNuxtState()`: it reads `false` afterwards until the next restore.
+
+A sign-in or `logout()` that happens while a restore is still in flight wins over it. It waits for a refresh already on its way, so that refresh's cookie can't land on top of the new session, and a refresh that starts while a sign-in or logout is on the wire waits for it. The first wait is capped at 10 seconds so a hung request can't lock anyone out — a refresh slower than that can still land its cookie afterwards. Anything an older restore, refresh or `fetchUser()` returns afterwards is discarded — the screen never shows the previous account, and a logged-out user isn't signed back in. A sign-in that answers after `logout()` ends the session it was given instead of signing in.
+
+These guards work within one browser tab. In BFF mode the proxy also refreshes on its own when an app-API call finds the token expired, and another tab can refresh at any time; switching to a different account while one of those is in flight can still leave the previous account's session cookie in place.
 
 A misconfigured endpoint (a `404`, say) also counts as "couldn't tell", and retrying won't fix that. If `restoreFailed` shows up in development, check your `baseURL` and `user.endpoint` first.
 
 > [!NOTE]
-> **Behind a BFF, set [`clientIpHeader`](/configuration#clientipheader).** Without it, every visitor's refresh reaches lukk from the BFF's own address and shares one rate-limit bucket. A single client exhausting it puts the whole app into the "couldn't reach the server" state. The refresh token isn't consumed by a throttled attempt, so nobody is signed out — but nobody can be restored either until the limit resets.
+> **Behind a BFF, set [`clientIpHeader`](/configuration#clientipheader) — and configure Laravel's `TrustProxies` for it.** Without both, every visitor's refresh reaches lukk from the BFF's own address and shares one rate-limit bucket: 30 per minute by default, for the whole app. Ordinary traffic can exhaust that — a signed-in visitor refreshes whenever their access token has expired, so a few dozen of them arriving in the same minute is enough — and the rest of that minute puts every restoring visitor into the "couldn't reach the server" state. The refresh token isn't consumed by a throttled attempt, so nobody is signed out, but nobody can be restored either until the limit resets.
 
 #### What `ready` deliberately doesn't do
 
 - **An anonymous server render is never marked `ready`.** That render isn't `no-store`, so a shared cache or CDN may serve it to anyone — including a signed-in visitor whose cookie the edge ignored. A baked-in `ready: true` would stop that visitor's client from restoring their session. The cost: a signed-out call-to-action gated on `ready` appears only after the client restore. If that matters for first paint or SEO, render it without waiting and keep only the *decisions* behind `ready`.
 - **It stays `true` after `logout()`.** Signed out is still a resolved answer.
 
-> [!CAUTION]
-> **Don't cache routes that hydrate a user.** lukk-nuxt marks a hydrated render `Cache-Control: no-store`, but a `routeRules` entry with `swr`, `isr` or `cache` on that route replaces the header — and the cached page then carries one user's `user`, `ready`, and rotated session cookie to the next visitor.
+> [!NOTE]
+> **A caching route rule turns hydration off on that route.** Nitro's own route cache (`swr`, `cache`) renders without the visitor's cookies, so the server never sees a session: everyone gets the anonymous render with `ready: false`, and each client restores its own. No user's data enters the cache — but you lose server-rendered account data there. Don't add `cookie` to that rule's `varies` to get it back. Each session then gets its own cached copy, a hit replays a session cookie the server has since rotated, and the cached response goes out with the rule's `Cache-Control` instead of `no-store` and without `Vary: Cookie` — so a CDN or browser further down can store one user's page.
+>
+> A cache Nitro doesn't own is different — a CDN, or a hosting platform's `isr`. lukk-nuxt marks a hydrated render `Cache-Control: no-store`; one that ignores it, or that renders with cookies, can store one user's page and hand it to the next visitor. Check how yours treats both.
 
 ### Revoking sessions
 
