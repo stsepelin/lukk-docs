@@ -157,6 +157,9 @@ Everything you need for the common case is on one composable, auto-imported in e
 const {
   user,                // Ref<User | null> — the authenticated user (see /user)
   loggedIn,            // ComputedRef<boolean>
+  ready,               // ComputedRef<boolean> — has the session been resolved? (see below)
+  whenReady,           // () => Promise<void> — resolves once `ready` is true
+  restoreFailed,       // ComputedRef<boolean> — the restore couldn't reach an answer (see below)
   login,               // (credentials) => Promise<LoginResult>
   logout,              // () => Promise<void>
   fetchUser,           // () => Promise<void> — reload the user
@@ -237,6 +240,132 @@ sequenceDiagram
 ```
 
 You don't normally call `initSession()` yourself — the plugin does. It's exposed for tests and custom boot flows.
+
+### Waiting for the session (`ready`)
+
+`loggedIn` is `false` in two different situations: the visitor is **anonymous**, or the session **hasn't been resolved yet**. A redirect, a fetch of account data, or a deep-link restore that runs in the second situation makes the wrong decision — and there's no later event to retry on.
+
+`ready` tells them apart. It becomes `true` once the restore has **finished**, and `restoreFailed` says whether it actually reached an answer:
+
+| `ready` | `loggedIn` | `restoreFailed` | Meaning |
+|---|---|---|---|
+| `false` | `false` | `false` | Not resolved yet — don't decide anything |
+| `true` | `true` | `false` | Signed in |
+| `true` | `false` | `false` | Signed out |
+| `true` | `false` | `true` | Couldn't tell — the server was throttled, erroring, or unreachable |
+
+**Gate decisions on `ready`; render on `loggedIn`.** Anything that would be wrong for a signed-in visitor — redirecting to `/login`, skipping a data fetch, dropping a `?id=` from the URL — should wait for `ready`. Pure rendering can use `loggedIn` directly.
+
+#### Where it's `false`
+
+On the **client**, it is already `true` by the time route middleware, component `setup()`, and `onMounted` run: Nuxt awaits the restore plugin before the initial navigation and before mounting the app. When the server [hydrated the user](/transport-modes#ssr-hydration), it's `true` from the very first line of code, so that path stays synchronous.
+
+It is `false` in two places:
+
+- **During a server render that didn't hydrate a user.** That covers [direct mode](/transport-modes#direct-mode) (the server never sees the refresh cookie), `ssrHydrate: false`, prerendered routes, and a session the server couldn't rotate. The server can't tell any of these from an anonymous visitor, so it doesn't claim to know — the client decides after its restore. This is the case that bites: a `useAsyncData` that skips when `!loggedIn` runs on the server, bakes an empty result into the payload, and does **not** re-run when the page hydrates.
+- **In any plugin that runs before, or in parallel with, lukk's `lukk:session-restore`.**
+
+#### Restoring a deep link
+
+Resolve the link on the client, once the session is known:
+
+```vue
+<script setup lang="ts">
+const route = useRoute()
+const api = useLukkFetch()
+const { loggedIn, whenReady } = useLukkAuth()
+const order = ref<Order | null>(null)
+
+onMounted(async () => {
+  await whenReady()
+
+  if (!loggedIn.value) {
+    return navigateTo({ path: '/login', query: { redirect: route.fullPath } })
+  }
+
+  if (route.query.id) {
+    order.value = await api(`/api/orders/${route.query.id}`)
+  }
+})
+</script>
+```
+
+For data loaded through `useAsyncData`, the fix is `server: false`. On the server the handler would see an unresolved session, return nothing, and bake that into the payload — and the client doesn't re-run a handler whose result came from the server. On the client the session is already resolved, so the handler sees the real answer:
+
+```ts
+const api = useLukkFetch()
+const { loggedIn } = useLukkAuth()
+
+const { data: orders } = await useAsyncData('orders',
+  () => loggedIn.value ? api('/api/orders') : Promise.resolve([]),
+  { server: false, watch: [loggedIn] }, // refetch on login / logout
+)
+```
+
+#### In route middleware
+
+Middleware runs on the server **and again on the client** during hydration. When the server can't resolve the session, defer instead of redirecting — the client run sees it resolved:
+
+```ts
+// middleware/account.ts
+export default defineNuxtRouteMiddleware((to) => {
+  const { ready, loggedIn } = useLukkAuth()
+
+  if (!ready.value) return // the server couldn't tell — let the client decide
+
+  if (!loggedIn.value) return navigateTo({ path: '/login', query: { redirect: to.fullPath } })
+})
+```
+
+> [!WARNING]
+> **`whenReady()` resolves immediately on the server**, even when `ready` is `false`. Every plugin has already run by then, and nothing later in the request can resolve the session — waiting would hang the render until the socket timed out. So on the server, `await whenReady()` is not a guarantee: read `ready` afterwards. Use `whenReady()` in client code (`onMounted`, watchers, event handlers) and `ready` in anything that also runs on the server.
+
+#### When the restore can't reach an answer
+
+Only a `401` or `403` means "no session". A refresh that was rate-limited (`429`), hit a server error (`5xx`), or never reached the server at all leaves the visitor signed out **as far as the UI can tell**, but they may well have a valid session. The same applies when the refresh works and your user endpoint then fails. `restoreFailed` is `true` in exactly those cases, so you can offer a retry instead of a login form:
+
+```vue
+<script setup lang="ts">
+const { loggedIn, restoreFailed, initSession } = useLukkAuth()
+const retrying = ref(false)
+
+async function retry() {
+  retrying.value = true
+  try { await initSession() }
+  finally { retrying.value = false }
+}
+</script>
+
+<template>
+  <AccountMenu v-if="loggedIn" />
+  <p v-else-if="restoreFailed">
+    We couldn't reach the server.
+    <button :disabled="retrying" @click="retry">Try again</button>
+  </p>
+  <LoginButton v-else />
+</template>
+```
+
+`initSession()` is the retry: it runs the same single-flight refresh as the automatic restore (so it can't race a request's own refresh), and it updates `restoreFailed` either way. The flag is hidden while someone is signed in and cleared by `logout()`, since both are definitive answers.
+
+In middleware that sends signed-out visitors to `/login`, check `restoreFailed` too. Otherwise a brief server outage sends every signed-in visitor to the login page, even though their session is intact:
+
+```ts
+export default defineNuxtRouteMiddleware(() => {
+  const { ready, loggedIn, restoreFailed } = useLukkAuth()
+
+  if (!ready.value || restoreFailed.value) return // unknown — don't send a signed-in user to /login
+  if (!loggedIn.value) return navigateTo('/login')
+})
+```
+
+> [!NOTE]
+> The built-in [`lukk-auth`](#route-middleware) middleware does not check `ready` or `restoreFailed` yet. It redirects whenever `loggedIn` is `false`, including during a server render that couldn't resolve the session. Write your own, as above, where that matters.
+
+A few things `ready` deliberately does not do:
+
+- **An anonymous server render is never marked `ready`.** That render isn't `no-store`, so a shared cache or CDN may serve it to anyone — including a signed-in visitor whose cookie the edge ignored. A baked-in `ready: true` would stop that visitor's client from restoring their session. The cost: a signed-out call-to-action gated on `ready` renders as a placeholder on the server and appears after the client restore. If that CTA matters for first paint or SEO, render it on `loggedIn` and keep only the *decisions* behind `ready`.
+- **It stays `true` after `logout()`.** Signed out is still a resolved answer.
 
 ### Revoking sessions
 
