@@ -276,6 +276,7 @@ Everything is configured under the `lukk` key in `nuxt.config.ts`:
 | `session.password` | `string` | env | BFF sealed-session secret (≥ 32 chars). |
 | `session.cookieSecure` | `bool` | auto | BFF session cookie `Secure`/`__Host-` — see [Local Development](/local-development). |
 | `session.name` | `string` | — | BFF session-cookie namespace, so co-hosted apps don't collide. |
+| `session.sharedStore` | `string` | — | BFF: a Nitro storage mount every instance shares, for the record of replaced sessions. |
 | `confirmationHeader` | `string` | `'X-Lukk-Confirmation'` | Header carrying the step-up token. |
 | `clientIpHeader` | `string` | `''` | BFF-only, opt-in — forward the real visitor IP upstream. |
 | `storage` | `string` | `'cookie'` | BFF token storage backend. |
@@ -407,6 +408,33 @@ Unset keeps the default names, so adding it to one app doesn't change the other.
 
 > [!WARNING]
 > `session.name` is **de-confliction, not a trust boundary.** Apps that share an origin — the same host with path routing, or `localhost` across ports — share one cookie jar, and the namespace only keeps their cookies from overwriting one another. The real isolation is the per-app [`session.password`](#session-password) (the seal): a co-hosted app can't decrypt or forge another app's session without its password. For apps in **distinct trust domains**, put them on **separate subdomains** — where the `__Host-` prefix plus the proxy's `Origin` check give real isolation — and give each a distinct, strong `session.password`.
+
+### `session.sharedStore`
+
+The BFF remembers, for ten minutes, the sessions a sign-in replaced or a logout ended, so a refresh still in flight for one can't write it back into the browser (see [Authentication](/authentication#when-the-restore-can-t-reach-an-answer)). By default that record lives in each server process. Behind a load balancer without sticky sessions — or on serverless and edge runtimes, where every instance or isolate is its own process — a late request served elsewhere doesn't see it.
+
+Name a [Nitro storage mount](https://nitro.build/guide/storage) that every instance shares, and the record is written there too:
+
+```ts
+export default defineNuxtConfig({
+  nitro: { storage: { 'lukk-sessions': { driver: 'redis', url: process.env.REDIS_URL } } },
+  lukk: { session: { sharedStore: 'lukk-sessions' } },
+})
+```
+
+Use a strongly consistent driver that expires keys itself — Redis, or Upstash / Vercel KV. Not Cloudflare KV: a write can take up to a minute to show on another location, and the window this record guards is under a second. Each entry also carries its own expiry, so a driver without TTL still answers correctly, but never deletes anything.
+
+Each store call is capped at 300 ms, and after a failure the store is left alone for 30 seconds — a slow or unreachable store falls back to the per-process record instead of holding up sign-ins, logouts and page loads. lukk-nuxt reports that once per server process, and warns at startup when the mount name matches no configured `nitro.storage` mount.
+
+With Redis, also tell the client not to queue and retry commands while the connection is down, so each call fails fast instead of running into that cap every time. (The client still logs its own reconnect attempts, `[ioredis] Unhandled error event`, for as long as the outage lasts.)
+
+```ts
+nitro: {
+  storage: {
+    'lukk-sessions': { driver: 'redis', url: process.env.REDIS_URL, enableOfflineQueue: false, maxRetriesPerRequest: 1 },
+  },
+},
+```
 
 ### `clientIpHeader`
 
