@@ -221,6 +221,13 @@ await logout()
 
 This revokes the session on lukk and clears the local state (access token, user, any pending challenge or confirmation) — even if the network call fails, the client is left logged out.
 
+**Await it before navigating away.** When the access token has expired, `logout()` renews it and retries — one more round trip. A full page load that cancels that retry leaves the session unrevoked on lukk (in direct mode; the BFF renews on the server):
+
+```ts
+await logout()
+await navigateTo('/login', { external: true }) // not before the logout has finished
+```
+
 ### Session restore
 
 A returning user with a valid refresh token should arrive already logged in. The module registers a client plugin that calls `initSession()` on load, which silently attempts a refresh and, if it succeeds, loads the user:
@@ -354,7 +361,7 @@ export async function loadPreferences() {
 }
 ```
 
-Plugins run one after another. A plugin that **awaits** `whenReady()` in its setup and runs *before* `lukk:session-restore` — `enforce: 'pre'`, or one added by a module listed after `lukk-nuxt` — waits on a plugin that can't start until it finishes, and the app never boots. Depending on `lukk:client` doesn't fix that. Depend on the restore plugin by name, **in a `.client.ts` file**: the restore only runs in the browser, so a universal plugin naming it is reported — a build error on Nuxt 3, a development warning on Nuxt 4.
+Plugins run one after another. A plugin that **awaits** `whenReady()` in its setup and runs *before* `lukk:session-restore` — `enforce: 'pre'`, or one added by a module listed after `lukk-nuxt` — waits on a plugin that can't start until it finishes, and the app never boots. Depending on `lukk:client` doesn't fix that. Depend on the restore plugin by name, **in a `.client.ts` file**: the restore only runs in the browser, so a universal plugin naming it is reported — logged as an error during a Nuxt 3 build (which still succeeds), a development warning on Nuxt 4.
 
 In development lukk-nuxt warns when `whenReady()` is called before the restore has started. The same call is harmless when it isn't awaited in a plugin's setup, so treat the warning as "check this", not as a failure.
 
@@ -425,14 +432,25 @@ async function retry() {
 
 `initSession()` is the retry: it uses the same single refresh as the automatic restore, so it can't race a request's own refresh. `restoreFailed` is cleared by any definitive answer — a user loaded, a `401`/`403`, a sign-in, or `logout()`. Unlike `ready`, it doesn't survive `clearNuxtState()`: it reads `false` afterwards until the next restore.
 
-A sign-in or `logout()` that happens while a restore is still in flight wins over it. It waits for a refresh already on its way, so that refresh's cookie can't land on top of the new session, and a refresh that starts while a sign-in or logout is on the wire waits for it. The first wait is capped at 10 seconds so a hung request can't lock anyone out. Anything an older restore, refresh or `fetchUser()` returns afterwards is discarded — the screen never shows the previous account, and a logged-out user isn't signed back in. A sign-in that answers after `logout()` ends the session it was given instead of signing in.
+A sign-in or `logout()` that happens while a restore is still in flight wins over it. It waits for a refresh already on its way, so that refresh's cookie can't land on top of the new session, and a refresh that starts while a sign-in or logout is on the wire waits for it. Both waits are capped at 10 seconds so a hung request can't lock anyone out. Anything an older restore, refresh or `fetchUser()` returns afterwards is discarded, so a logged-out user isn't signed back in and a late result can't put the previous account on screen. A sign-in that answers after `logout()` ends the session it was given instead of signing in.
 
-In direct mode that cap is the limit: a refresh slower than 10 seconds can still land its cookie afterwards. In BFF mode the proxy also guards it on the server, which covers what the tab can't see — an app-API call renewing an expired token, a page render, another tab's restore. A sign-in or logout records the sealed session it replaced, and a refresh still out for that session is neither rotated nor written back: each path checks again just before its response goes out. Another tab that was restoring asks once more and picks up the newer session; one already signed in reloads its user. The record is kept per server process for ten minutes — behind a load balancer without sticky sessions, a request another instance serves isn't covered.
+In direct mode that cap is the limit: a refresh slower than 10 seconds, or a sign-in in another tab, can still leave the shared refresh cookie belonging to a different account. The next refresh then notices — its token names a different subject than the user on screen — and reloads the user. The request that triggered that refresh already runs as the other account, before the reload finishes.
+
+In BFF mode the proxy also guards it on the server, which covers what the tab can't see — an app-API call renewing an expired token, a page render, another tab's restore. A sign-in or logout records the sealed session it replaced, and a refresh still out for that session is never written back: each path checks again just before its response goes out. (It may still be rotated upstream by a refresh that was already sent.) Another tab that was restoring asks once more and picks up the newer session; one already signed in reloads its user; a page render for the replaced session renders signed out and lets the client restore.
+
+The limits:
+
+- The record is kept per server process for ten minutes. Behind a load balancer without sticky sessions, a request another instance serves isn't covered, and on serverless or edge runtimes a process is an instance or isolate — there the guard is best-effort.
+- A cookie can still land in the moment between a response's headers leaving the server and the browser storing them.
+- A session sealed by lukk-nuxt before this version has no id of its own. Refreshes cover it, but a page load that needs no refresh can still render it as the account it replaced until that tab reloads.
+- If a sign-in's response never reaches the browser, the session it replaced reads as signed out for those ten minutes — yet it is still live on the server, and ordinary requests with its cookie still work, until it's logged out or expires.
+- With Nuxt's opt-in `ssrStreaming`, the last check runs right after the user loads; a session that ends between then and the first streamed chunk isn't caught.
+- A sign-in waits for a logout still on the wire in the same tab, but not for one in another tab.
 
 A misconfigured endpoint (a `404`, say) also counts as "couldn't tell", and retrying won't fix that. If `restoreFailed` shows up in development, check your `baseURL` and `user.endpoint` first.
 
 > [!NOTE]
-> **Behind a BFF, set [`clientIpHeader`](/configuration#clientipheader) — and configure Laravel's `TrustProxies` for it.** Without both, every visitor's refresh reaches lukk from the BFF's own address and shares one rate-limit bucket: 30 per minute by default, for the whole app. Ordinary traffic can exhaust that — a signed-in visitor refreshes whenever their access token has expired, so a few dozen of them arriving in the same minute is enough — and the rest of that minute puts every restoring visitor into the "couldn't reach the server" state. The refresh token isn't consumed by a throttled attempt, so nobody is signed out, but nobody can be restored either until the limit resets.
+> **Behind a BFF, set [`clientIpHeader`](/configuration#clientipheader) — and configure Laravel's `TrustProxies` for it.** Without both, every visitor's refresh reaches lukk from the BFF's own address and shares one rate-limit bucket: 30 per minute by default, for the whole app. Ordinary traffic can exhaust that — a signed-in visitor refreshes whenever their access token has expired, so a few dozen of them arriving in the same minute is enough — and the rest of that minute puts every restoring visitor into the "couldn't reach the server" state. The refresh token isn't consumed by a throttled attempt, so nobody is signed out, but nobody can be restored either until the limit resets. It needn't be accidental, either: one visitor with an account can use up the shared bucket on purpose.
 
 #### What `ready` deliberately doesn't do
 
