@@ -54,7 +54,7 @@ The `iss` and `aud` claims stamped into every token and validated on every reque
 
 | Key | Default | Description |
 |---|---|---|
-| `grace_seconds` | `30` | The overlap window during which a just-rotated token is still tolerated, so concurrent refreshes (multiple tabs, SSR + hydration) do not trip reuse detection. Within this window the old token yields a fresh access token only — see [Authentication → Refreshing tokens](/authentication#refreshing-tokens). |
+| `grace_seconds` | `30` | The overlap window during which a just-rotated token is still tolerated, so concurrent refreshes (multiple tabs, SSR + hydration) do not trip reuse detection. Within this window the old token yields a full token pair — a sibling refresh token in the same session, which must be stored — see [Authentication → Refreshing tokens](/authentication#refreshing-tokens). |
 | `leeway` | `5` | Clock-skew tolerance, in seconds, applied when validating the `exp` and `nbf` claims. |
 
 ### Rate limits
@@ -167,9 +167,6 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
 
 ```php
 'features' => [
-    'rotation' => true,
-    'reuse_detection' => true,
-    'denylist' => true,
     'logout_all' => true,
     'two_factor' => false,
     'lockout' => false,
@@ -191,12 +188,11 @@ session-management and account-security routes. `abilities` only matters for an 
 come solely from pinned sessions; configuring `Lukk::abilitiesUsing()` turns the feature on by
 itself.
 
+Rotation, reuse detection and the denylist are not switches: they are the security model. Releases up to 0.6 listed `rotation`, `reuse_detection` and `denylist` here, but never read them; 0.7.0 removes them, and a published config that still carries them keeps working.
+
 | Feature | Default | Description |
 |---|---|---|
-| `rotation` | `true` | Rotate the refresh token on every refresh. |
-| `reuse_detection` | `true` | Revoke the whole family when a consumed token is replayed. |
-| `denylist` | `true` | Honor the cache-backed revocation denylist. |
-| `logout_all` | `true` | Enable the "revoke every session" path. |
+| `logout_all` | `true` | Mount `DELETE /auth/sessions` ("log out everywhere"). Honoured from lukk 0.7.0; earlier releases ignored it. |
 | `two_factor` | `false` | Enable [two-factor authentication](/two-factor-authentication). Requires `pragmarx/google2fa`. |
 | `lockout` | `false` | Enable the [account lockout](/account-lockout) — the NIST SP 800-63B §5.2.2 consecutive-failure cap. Requires the `lukk-lockout-migrations` migration. |
 | `change_password` | **`true`** | Enable [change password](/change-password) (`POST /auth/password`). On by default — it needs no configuration. |

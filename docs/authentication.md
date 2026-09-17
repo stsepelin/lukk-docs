@@ -12,12 +12,12 @@ When `lukk.routes` is `true` (the default), the package registers these routes u
 |---|---|---|---|
 | `POST` | `/auth/login` | login throttle | Exchange email + password for a token pair. |
 | `POST` | `/auth/refresh` | `throttle:lukk-refresh` | Exchange a refresh token for a rotated pair. |
-| `POST` | `/auth/logout` | `auth:api` | Revoke the current session. |
+| `POST` | `/auth/logout` | `auth:api` (lukk ≤ 0.6); none from 0.7.0 — see [Logging out](#logging-out) | Revoke the current session. |
 | `DELETE` | `/auth/sessions` | `auth:api` | Revoke every session for the user. |
 | `DELETE` | `/auth/sessions/others` | `auth:api` | Revoke every session **except** the current one. |
 
 > [!NOTE]
-> The login throttle is the per-account failure limiter described in [Configuration → Rate Limits](/configuration#rate-limits), not a route `throttle` middleware. All throttles — login, refresh, two-factor, passkeys — are tunable there.
+> Login is limited twice: a per-IP route throttle (`throttle:lukk-login`, 30 attempts a minute by default) and the per-account failure limiter. Both are described in [Configuration → Rate Limits](/configuration#rate-limits), along with every other throttle — refresh, two-factor, passkeys.
 
 ### Logging in
 
@@ -61,7 +61,7 @@ Content-Type: application/json
 
 Each refresh **rotates** the token: the response contains a brand-new refresh token, and the old one is consumed. Replaying a consumed token after the grace window revokes the entire session — see [Tokens & Rotation → Reuse detection](/tokens-and-rotation).
 
-The grace window (`grace_seconds`, default 30s) exists so concurrent refreshes don't fight. If the same token is presented twice within the window — multiple tabs, or SSR plus hydration — the second call gets a fresh **access** token under the same session, rather than being treated as theft.
+The grace window (`grace_seconds`, default 30s) exists so concurrent refreshes don't fight. If the same token is presented twice within the window — multiple tabs, or SSR plus hydration — the second call gets a full token pair under the same session (a sibling refresh token, which the client must store like any other), rather than being treated as theft.
 
 > [!NOTE]
 > In [cookie mode](#output-modes), the refresh token is read from the `__Host-refresh` cookie automatically, so the request body can be empty.
@@ -85,11 +85,18 @@ sequenceDiagram
 
 ### Logging out
 
-All logout routes require a valid access token (`auth:api`):
-
 - **`POST /auth/logout`** revokes the current session and denylists its family, killing any access token issued for it within one request.
-- **`DELETE /auth/sessions`** revokes every session belonging to the user — useful for a "log out everywhere" button.
-- **`DELETE /auth/sessions/others`** revokes every session except the one making the request — useful after a password change.
+- **`DELETE /auth/sessions`** revokes every session belonging to the user — useful for a "log out everywhere" button. Requires a valid access token; switch it off with [`features.logout_all`](/configuration#feature-toggles).
+- **`DELETE /auth/sessions/others`** revokes every session except the one making the request — useful after a password change. Requires a valid access token, and answers a bare `204` that leaves the caller's own refresh cookie in place.
+
+Up to lukk 0.6, `POST /auth/logout` also required a valid access token — so a client whose access token had expired (an idle tab) got a `401`, nothing was revoked, and in cookie mode the refresh cookie stayed valid for its whole lifetime.
+
+**From lukk 0.7.0** logout accepts **either** credential:
+
+- a **valid access token** revokes its session exactly as before (and still authenticates the request as its user);
+- the **refresh token** the client holds — the `__Host-refresh` cookie in cookie mode, or `refresh_token` in a JSON body — revokes the session it belongs to on that guard.
+
+An expired access token alone is **not** enough, whatever its signature. The answer is always `204`, so nothing reveals whether a token existed. The refresh cookie is only used — and only cleared — on a request a cross-site form can't make: `Content-Type: application/json` or `Sec-Fetch-Site: same-origin`. A cookie-mode client therefore sends an empty JSON body (lukk-js does). The refresh-token lookup has its own throttle; the logout itself has none, and a logout whose access token is valid doesn't count against it. When the lookup *is* throttled and nothing else ended the session, logout answers **`429`** with `Retry-After` and leaves the refresh cookie in place — retry it, because the session is still live.
 
 ### Output modes
 
@@ -221,11 +228,16 @@ await logout()
 
 This revokes the session on lukk and clears the local state (access token, user, any pending challenge or confirmation) — even if the network call fails, the client is left logged out.
 
-**Await it before navigating away.** When the access token has expired, `logout()` renews it and retries — one more round trip. A full page load that cancels that retry leaves the session unrevoked on lukk (in direct mode; the BFF renews on the server):
+**Await it before navigating away.** When the access token has expired, `logout()` renews it and retries — one more round trip. A full page load that cancels that retry leaves the session unrevoked on lukk (in direct mode; the BFF renews on the server). `logout()` can also reject — a session that was already gone, a network failure, a `429` from lukk 0.7.0's logout throttle — and it clears local state either way. A `401` means there was no session left to end; anything else means it may still be live on lukk (in direct mode the refresh cookie survives, and the next page load restores it), so offer a retry rather than sending the user on:
 
 ```ts
-await logout()
-await navigateTo('/login', { external: true }) // not before the logout has finished
+try {
+  await logout()
+}
+catch (error) {
+  if ((error as { status?: number }).status !== 401) return showLogoutRetry()
+}
+await navigateTo('/login', { external: true })
 ```
 
 ### Session restore
@@ -241,8 +253,11 @@ sequenceDiagram
         Lukk-->>App: new token pair
         App->>App: fetch user → loggedIn = true
     else no session
-        Lukk-->>App: 401
+        Lukk-->>App: 401 or 403
         App->>App: stay logged out
+    else couldn't tell
+        Lukk-->>App: 429, 5xx or unreachable
+        App->>App: restoreFailed = true
     end
 ```
 
@@ -361,7 +376,7 @@ export async function loadPreferences() {
 }
 ```
 
-Plugins run one after another. A plugin that **awaits** `whenReady()` in its setup and runs *before* `lukk:session-restore` — `enforce: 'pre'`, or one added by a module listed after `lukk-nuxt` — waits on a plugin that can't start until it finishes, and the app never boots. Depending on `lukk:client` doesn't fix that. Depend on the restore plugin by name, **in a `.client.ts` file**: the restore only runs in the browser, so a universal plugin naming it is reported — logged as an error during a Nuxt 3 build (which still succeeds), a development warning on Nuxt 4.
+Plugins run one after another. A plugin that **awaits** `whenReady()` in its setup and runs *before* `lukk:session-restore` — `enforce: 'pre'`, or one added by a module listed after `lukk-nuxt` — waits on a plugin that can't start until it finishes, and the app never boots. Depending on `lukk:client` doesn't fix that. Depend on the restore plugin by name, **in a `.client.ts` file**: the restore only runs in the browser, so a universal plugin naming it is reported — logged as an error during the build on Nuxt 3 and earlier 4.x releases (the build still succeeds), and only a development warning on recent Nuxt 4.
 
 In development lukk-nuxt warns when `whenReady()` is called before the restore has started. The same call is harmless when it isn't awaited in a plugin's setup, so treat the warning as "check this", not as a failure.
 
@@ -404,7 +419,7 @@ Two consequences of deferring, both deliberate:
 
 #### When the restore can't reach an answer
 
-Only a `401` or `403` means "no session". Any other failure leaves the visitor signed out **as far as the UI can tell**, though they may well have a valid session: a rate-limited refresh (`429`), a server error (`5xx`), a server that couldn't be reached, or a user endpoint that failed right after a successful refresh. `restoreFailed` is `true` in those cases, so you can offer a retry instead of a login form:
+Only a `401` or `403` means "no session" — or, in BFF mode, a `409` answered twice in a row, which says the session this browser holds was replaced and the retry couldn't pick up a newer one. Any other failure leaves the visitor signed out **as far as the UI can tell**, though they may well have a valid session: a rate-limited refresh (`429`), a server error (`5xx`), a server that couldn't be reached, or a user endpoint that failed right after a successful refresh. `restoreFailed` is `true` in those cases, so you can offer a retry instead of a login form:
 
 ```vue
 <script setup lang="ts">
@@ -436,16 +451,18 @@ A sign-in or `logout()` that happens while a restore is still in flight wins ove
 
 In direct mode that cap is the limit: a refresh slower than 10 seconds, or a sign-in in another tab, can still leave the shared refresh cookie belonging to a different account. The next refresh then notices — its token names a different subject than the user on screen — and reloads the user. The request that triggered that refresh already runs as the other account, before the reload finishes.
 
-In BFF mode the proxy also guards it on the server, which covers what the tab can't see — an app-API call renewing an expired token, a page render, another tab's restore. A sign-in or logout records the sealed session it replaced, and a refresh still out for that session is never written back: each path checks again just before its response goes out. (It may still be rotated upstream by a refresh that was already sent.) Another tab that was restoring asks once more and picks up the newer session; one already signed in reloads its user; a page render for the replaced session renders signed out and lets the client restore.
+In BFF mode the proxy also guards it on the server, which covers what the tab can't see — an app-API call renewing an expired token, a page render, another tab's restore. A sign-in or logout records the sealed session it replaced, and a refresh still out for that session is never written back: each path checks again just before its response goes out. A refresh that was already sent may still rotate it upstream; the proxy then logs those new tokens out in the background, so a browser still holding the old cookie can't later replay a consumed token into a false theft report. Another tab that was restoring asks once more and picks up the newer session; a page render for the replaced session renders signed out and lets the client restore. And a logout from the replaced session doesn't clear the cookie: the browser holds the newer one.
+
+In both modes, a tab that signs in or logs out tells the app's other open tabs (a `BroadcastChannel`, where the browser has one). They drop whatever they had in flight and re-check — a BFF tab reloads its user, a direct tab renews from the shared cookie first — so they stop showing an account the browser no longer holds. In direct mode, several open tabs renew from the same cookie at the same moment, which lukk's grace window absorbs: keep `grace_seconds` above `0`, or every sign-in with more than two tabs open revokes the session it just created.
 
 The limits:
 
 - The record is kept per server process for ten minutes. Behind a load balancer without sticky sessions, a request another instance serves isn't covered, and on serverless or edge runtimes a process is an instance or isolate — there the guard is best-effort.
 - A cookie can still land in the moment between a response's headers leaving the server and the browser storing them.
-- A session sealed by lukk-nuxt before this version has no id of its own. Refreshes cover it, but a page load that needs no refresh can still render it as the account it replaced until that tab reloads.
-- If a sign-in's response never reaches the browser, the session it replaced reads as signed out for those ten minutes — yet it is still live on the server, and ordinary requests with its cookie still work, until it's logged out or expires.
-- With Nuxt's opt-in `ssrStreaming`, the last check runs right after the user loads; a session that ends between then and the first streamed chunk isn't caught.
-- A sign-in waits for a logout still on the wire in the same tab, but not for one in another tab.
+- A session sealed by lukk-nuxt before 0.12.0 has no id of its own. Refreshes cover it, but a page load that needs no refresh can still render it as the account it replaced until that tab reloads.
+- If a sign-in's response never reaches the browser, the session it replaced reads as signed out for those ten minutes — yet it is still live on the server until it's logged out or expires, and requests with its cookie keep working until its access token expires (nothing refreshes a replaced session).
+- With Nuxt 4's opt-in `experimental.ssrStreaming`, the last check runs right after the user loads; a session that ends between then and the first streamed chunk isn't caught.
+- A sign-in waits for a logout still running in the same tab, but not for one in another tab. In BFF mode the proxy keeps that other tab's late logout from clearing the new cookie; in direct mode lukk's logout response clears the shared refresh cookie, so the new session is signed out in the browser — and stays alive on lukk, with nothing pointing at it, until it expires.
 
 A misconfigured endpoint (a `404`, say) also counts as "couldn't tell", and retrying won't fix that. If `restoreFailed` shows up in development, check your `baseURL` and `user.endpoint` first.
 
@@ -479,7 +496,7 @@ The module registers four route middlewares:
 
 | Middleware | Effect |
 |---|---|
-| `lukk-auth` | Redirects to `/login` when **not** authenticated. |
+| `lukk-auth` | Redirects to `/login` when **not** authenticated — including during a server render that couldn't resolve the session ([see the note](#in-route-middleware)). |
 | `lukk-guest` | Redirects to `/` when **already** authenticated (e.g. to keep logged-in users off the login page). |
 | `lukk-verified` | Redirects a logged-in user with an **unverified email** to `/verify-email`. |
 | `lukk-confirmed` | Redirects a logged-in user without a recent **step-up confirmation** to `/confirm-password`. |

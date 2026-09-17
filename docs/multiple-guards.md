@@ -122,11 +122,11 @@ Each app's BFF seals only its guard's tokens in its own cookie; with subdomains,
 
 - **This isolates authentication, not authorization.** A guard boundary stops a client token from reaching admin APIs; it does **not** replace per-object / per-action checks (OWASP API1 BOLA / API5 BFLA). Gate admin actions with Laravel Policies/Gates, deny-by-default.
 - **Harden the admin tier further:** mandatory phishing-resistant MFA (passkeys), shorter TTLs, network-gated host, and an immutable audit log of admin actions.
-- Per-guard email-verification / password-reset / 2FA / passkeys aren't wired to extra guards yet — those features run on the default guard.
+- Per-guard email verification, password reset and passkeys aren't wired to extra guards yet — those features run on the default guard. Two-factor is split: a guard whose config enables it gets its own `two-factor-challenge` route, so a challenged login can complete there, but enrolment and management (which need step-up) stay on the default guard.
 
 ## Cookie mode across guards
 
-In [cookie mode](/transport-modes#direct) each guard gets its **own** refresh cookie: the default guard keeps `__Host-refresh`, and every other guard is suffixed with its name (`__Host-refresh-admin`). Guards may legitimately share a host and differ only by path, and a single cookie name at `Path=/` meant logging into one silently overwrote the other's cookie — each login destroying the other session.
+In [cookie mode](/transport-modes#direct-mode) each guard gets its **own** refresh cookie: the default guard keeps `__Host-refresh`, and every other guard is suffixed with its name (`__Host-refresh-admin`). Guards may legitimately share a host and differ only by path, and a single cookie name at `Path=/` meant logging into one silently overwrote the other's cookie — each login destroying the other session.
 
 Per-guard `cookie_mode`, `refresh_ttl` and `cookie.*` overrides are honoured too, so a short-lived admin session can sit alongside a long-lived user one:
 
