@@ -32,6 +32,12 @@ A replayed token whose family is **already** revoked is rejected quietly, withou
 > [!IMPORTANT]
 > The revoke-then-dispatch happens **after** the rotation transaction commits, so the family revocation and the event stay consistent. See [Tokens & Rotation](/tokens-and-rotation) for the reuse-detection mechanics and the grace window that keeps normal concurrency from tripping a false revoke.
 
+### SessionUnclaimed
+
+**lukk 0.7.0.** With [`claim_seconds`](/configuration#refresh-behavior) on, `Lukk\Events\SessionUnclaimed` fires when a session's first use comes after its claim window, and lukk revokes that session. It carries `$familyId` and `$guard`.
+
+Unlike [`RefreshTokenReused`](#refreshtokenreused), this is not a theft signal: the usual cause is a sign-in whose response never reached its client. Log it, but don't page anyone.
+
 ### RefreshFamilyForked
 
 The [grace window](/tokens-and-rotation#the-grace-window) tolerates a re-consumption by minting a sibling rather than revoking — that's what stops a multi-tab or SSR client logging itself out. The cost is that a thief who replays *inside* the window gets a sibling too, after which both chains rotate independently and never trip reuse detection.

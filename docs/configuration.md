@@ -49,12 +49,14 @@ The `iss` and `aud` claims stamped into every token and validated on every reque
 
 ```php
 'grace_seconds' => (int) env('LUKK_GRACE', 30),
+'claim_seconds' => (int) env('LUKK_CLAIM_SECONDS', 0),
 'leeway' => (int) env('LUKK_LEEWAY', 5),
 ```
 
 | Key | Default | Description |
 |---|---|---|
 | `grace_seconds` | `30` | The overlap window during which a just-rotated token is still tolerated, so concurrent refreshes (multiple tabs, SSR + hydration) do not trip reuse detection. Within this window the old token yields a full token pair — a sibling refresh token in the same session, which must be stored — see [Authentication → Refreshing tokens](/authentication#refreshing-tokens). |
+| `claim_seconds` | `0` (off) | **lukk 0.7.0.** A session a sign-in starts must be *claimed* within this window — by `POST /auth/session/claim`, an authenticated request to this lukk app, or a refresh. If it isn't, the first late use of the credential issued at sign-in revokes the whole session and fires [`SessionUnclaimed`](/events#sessionunclaimed). It ends sessions whose sign-in response never reached the client (a dropped connection, an aborted request), which otherwise stay alive until their refresh token expires. `600` suits most apps.<br><br>**The contract:** every client must claim within the window. lukk-js calls the claim route right after each sign-in. A client that uses its access token only on *another* service never touches this app, so it must call the route too. Only the original sign-in credential is ever revoked: a token minted by a later refresh counts as a claim. The window is never shorter than `access_ttl` + `leeway`, or 60 seconds. Sessions with a pinned grant (personal access tokens, impersonation) are never marked. A replacement `RefreshTokenRepository` must return `createdAt` on its records; without it a late original refresh token isn't recognised (it fails open, with a warning logged once per worker process). Markers live in the denylist cache: losing them fails open, and restoring an old snapshot can at most revoke a session still presenting its original refresh token after the window. Costs one cache read per authenticated request when on, none when off. |
 | `leeway` | `5` | Clock-skew tolerance, in seconds, applied when validating the `exp` and `nbf` claims. |
 
 ### Rate limits
