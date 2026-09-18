@@ -84,9 +84,10 @@ use App\Auth\RedisRefreshTokenRepository;
 $this->app->bind(RefreshTokenRepository::class, RedisRefreshTokenRepository::class);
 ```
 
-Two fields on `RefreshTokenRecord` carry policy that the repository is the only thing able to supply, and both fail quietly if you leave them out:
+Three fields on `RefreshTokenRecord` carry policy that the repository is the only thing able to supply, and all of them fail quietly if you leave them out:
 
-- **`createdAt`** — the row's creation time. It is how [`claim_seconds`](/configuration#refresh-behavior) recognises a session's never-rotated original refresh token. Return `null` and that revocation is disabled entirely (lukk logs one warning per worker process and carries on).
+- **`original`** — whether this row is the family's first, the one you were handed with a `null` `$previousId`. It is how [`claim_seconds`](/configuration#refresh-behavior) recognises the refresh token the sign-in itself issued, and it is the field to return. It is a tri-state: leave it `null` ("I can't say") and lukk falls back to `createdAt`. Never answer `true` for a row you are unsure about — a successor reported as the original is a session in active use being logged out.
+- **`createdAt`** — the row's creation time, and the fallback for `claim_seconds` when `original` is unknown. It only compares mint times, so a successor minted within a couple of seconds of the sign-in reads as the original; that tolerance is a fixed constant, deliberately not `leeway` (both timestamps come from the same server in one sign-in, so only write skew has to be absorbed). Leave **both** fields out and the revocation is disabled entirely (lukk logs one warning per worker process and carries on).
 - **`scope`** — the family's pinned [ability](/abilities) grant. `null` and `''` are different answers: `null` means *derive the grant on every mint*, `''` means *pinned to nothing*. Round-trip the empty string. Collapsing the two lets the most restricted token in the system widen to its subject's full grant on the first refresh.
 
 ## Reshaping responses

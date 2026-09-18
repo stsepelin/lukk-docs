@@ -25,7 +25,7 @@ lukk: { session: { cookieSecure: true } } // or false; default = secure in prod 
 ```
 
 > [!WARNING]
-> Never set `cookieSecure: false` in a production build.
+> Never set `cookieSecure: false` in a production build. The session cookie and both logout cookies lose the `__Host-` prefix and the `Secure` attribute with it, so any host on the domain can set them — including the logout note, which your own server then acts on by ending the visitor's session. lukk-nuxt warns at build time if you do this outside dev.
 
 > [!TIP]
 > Running **two lukk apps on `localhost`** (e.g. `:3000` and `:3001`)? Cookies are scoped by host, not port, so they share one cookie jar and clobber each other's session. Give each a distinct [`session.name`](/configuration#session-name) to namespace its cookie.

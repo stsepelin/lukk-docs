@@ -142,7 +142,7 @@ Three columns are worth a word:
 
 - **`guard`** (lukk 0.4.0) is null on the default guard and carries the guard's name on any other, so [multiple guards](/multiple-guards) can't see, rotate, or revoke each other's families even where `users.id === admins.id`. A single-guard install never reads it.
 - **`scope`** (lukk 0.6.0) is the family's pinned [ability](/abilities) grant. `null` and `''` mean different things — *derive on every mint* and *pinned to nothing* — so a replacement [`RefreshTokenRepository`](/customization#swapping-storage) has to round-trip the empty string.
-- **`revoked_at` is indexed** because `lukk:prune` sweeps on it. `created_at` (from `timestamps()`) is load-bearing too: it is how [`claim_seconds`](/configuration#refresh-behavior) recognises a session's never-rotated original token.
+- **`revoked_at` is indexed** because `lukk:prune` sweeps on it. `previous_id` is load-bearing beyond the audit chain: a row with none is the family's original, which is how [`claim_seconds`](/configuration#refresh-behavior) recognises a session's never-rotated original token.
 
 Change the `user_id` column type if your users have non-integer keys. The migration is [publish-only](/installation), so none of this is applied for you.
 
