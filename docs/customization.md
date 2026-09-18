@@ -70,8 +70,8 @@ use App\Models\RefreshToken;
 Lukk::useRefreshTokenModel(RefreshToken::class);
 ```
 
-> [!WARNING]
-> **Keep `$timestamps` on.** [`claim_seconds`](/configuration#refresh-behavior) recognises a session's original refresh token by the fact that its row was never rotated, and reads `created_at` to decide whether the claim window has passed. A subclass that turns timestamps off leaves that column null, and the feature then revokes nothing at all — silently, apart from one warning per worker process.
+> [!NOTE]
+> **`$timestamps = false` is safe here.** [`claim_seconds`](/configuration#refresh-behavior) recognises a session's original refresh token by its lineage — the row persisted with no predecessor — not by `created_at`, and the window itself is measured from the marker lukk wrote at sign-in. Timestamps are still worth keeping for the data-subject export, which reports when each session began.
 
 ## Swapping storage
 
