@@ -210,8 +210,8 @@ Rotation, reuse detection and the denylist are not switches: they are the securi
 | `password_reset` | `false` | Enable [password reset](/password-reset). |
 | `registration` | `false` | Enable [registration](/registration). |
 
-> [!WARNING]
-> The rotation, reuse-detection, and denylist features are the security core of the package. Disable them only if you fully understand the consequence.
+> [!NOTE]
+> Rotation, reuse detection and the denylist are **not** in this table, and there is no switch for them: they are the security model, not a feature. The `rotation` / `reuse_detection` / `denylist` keys older releases listed were never read, and 0.7.0 removes them.
 
 ### Two-factor
 

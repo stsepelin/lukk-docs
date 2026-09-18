@@ -119,7 +119,7 @@ To call your app API from a page or `useAsyncData`, use the auth-aware [`useLukk
 > | Key | Store | Holds |
 > |---|---|---|
 > | `lukk:logging-out:<app.baseURL>[#<session.name>]` | `sessionStorage` (direct only) | A logout started but not known to have finished: the moment it was asked for, and the session's refresh-token family (`fid`) when one was known. One minute. |
-> | `lukk:signed-in-at:<app.baseURL>[#<session.name>]` | `localStorage` (**both** transports) | When a sign-in was last *sent*, in any tab. Only read to decide whether a logout note that names no session is still current. |
+> | `lukk:signed-in-at:<app.baseURL>[#<session.name>]` | `localStorage` (**both** transports) | When a sign-in was last *sent*, in any tab. Read by **every** logout, in both transports, right before it sends: a sign-in recorded since that logout was asked for stands it down. |
 >
 > Both exist so the page load after a logout can finish it — see [Logging out](/authentication#logging-out-1). **Clearing `localStorage` on logout**, a common idiom, deletes the second one, and a note with no family then has no way to tell that a later sign-in has already superseded it: the next page load can end the **newer** session. If you clear storage on logout, `await logout()` first and leave lukk's two keys alone.
 
