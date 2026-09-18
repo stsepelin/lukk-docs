@@ -47,6 +47,10 @@ Refresh is atomic and reuse-detecting. In pseudocode:
 ```
 POST /auth/refresh (opaque refresh token RT):
   h = sha256(RT)
+  row = SELECT ... WHERE token_hash = h        # unlocked pre-read
+  if claim_seconds on and the transaction would ACCEPT this row:
+      claim the session, or -> 401 unclaimed   (SessionUnclaimed; never RefreshTokenReused)
+  resolve abilitiesUsing / tokenClaimsUsing    # no consumer code under the lock
   in a transaction:
     row = SELECT ... WHERE token_hash = h FOR UPDATE
     if no row              -> 401 invalid
@@ -61,11 +65,15 @@ POST /auth/refresh (opaque refresh token RT):
   return { access, refresh, expires_in }
 ```
 
+The [`claim_seconds`](/configuration#refresh-behavior) check runs **before** the transaction, and only for a token the transaction would go on to accept — a rejected one isn't a use, and reuse detection has to stay the thing that decides a replay. It is hoisted out for the same reason the `abilitiesUsing` / `tokenClaimsUsing` callbacks are: a cache round trip must not extend the row lock, and the revocation it may perform must run outside a transaction. An unclaimed session answers the same `401` as every other rejection and dispatches [`SessionUnclaimed`](/events#sessionunclaimed) — never `RefreshTokenReused`, because nothing was replayed.
+
 ```mermaid
 flowchart TD
     A[POST /auth/refresh<br/>h = sha256 token] --> B{row for h?}
     B -- no --> X[401 invalid]
-    B -- yes --> C{revoked?}
+    B -- yes --> N{claim_seconds on,<br/>row would be accepted,<br/>claim window passed?}
+    N -- yes --> U[revoke family<br/>outside the transaction] --> V[401 unclaimed · SessionUnclaimed]
+    N -- no --> C{revoked?}
     C -- yes --> K[revoke family + denylist fid<br/>after commit] --> R[401 · RefreshTokenReused]
     C -- no --> D{expired?}
     D -- yes --> X2[401 expired]
@@ -117,15 +125,25 @@ Because the denylist is consulted on every request, revocation is instant. It's 
 ```php
 Schema::create('refresh_tokens', function (Blueprint $table) {
     $table->ulid('id')->primary();
-    $table->foreignId('user_id')->index();
+    $table->unsignedBigInteger('user_id')->index();
+    $table->string('guard')->nullable();         // the guard this family belongs to
     $table->uuid('family_id')->index();          // stable across a rotation chain
     $table->char('token_hash', 64)->unique();    // sha256(opaque token)
     $table->ulid('previous_id')->nullable();     // audit chain
+    $table->text('scope')->nullable();           // pinned grant, or null to derive per mint
     $table->timestamp('rotated_at')->nullable(); // set when consumed
-    $table->timestamp('revoked_at')->nullable(); // hard kill (logout / reuse cascade)
-    $table->timestamp('expires_at')->index();
+    $table->timestamp('revoked_at')->nullable()->index(); // hard kill (logout / reuse cascade)
+    $table->timestamp('expires_at')->index();    // absolute family ceiling
     $table->timestamps();
 });
 ```
+
+Three columns are worth a word:
+
+- **`guard`** (lukk 0.4.0) is null on the default guard and carries the guard's name on any other, so [multiple guards](/multiple-guards) can't see, rotate, or revoke each other's families even where `users.id === admins.id`. A single-guard install never reads it.
+- **`scope`** (lukk 0.6.0) is the family's pinned [ability](/abilities) grant. `null` and `''` mean different things — *derive on every mint* and *pinned to nothing* — so a replacement [`RefreshTokenRepository`](/customization#swapping-storage) has to round-trip the empty string.
+- **`revoked_at` is indexed** because `lukk:prune` sweeps on it. `created_at` (from `timestamps()`) is load-bearing too: it is how [`claim_seconds`](/configuration#refresh-behavior) recognises a session's never-rotated original token.
+
+Change the `user_id` column type if your users have non-integer keys. The migration is [publish-only](/installation), so none of this is applied for you.
 
 Next: **[Transport Modes](/transport-modes)**

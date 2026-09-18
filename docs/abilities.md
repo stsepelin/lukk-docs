@@ -138,7 +138,7 @@ Both step-up routes are gated, not just the password one — `confirm-passkey` i
 $pair = app(StartSession::class)($user->getKey(), [], ['ci.deploy', Abilities::SESSIONS]);
 ```
 
-`POST /auth/logout` and `POST /auth/refresh` are never gated: they act on the calling session alone, and a pinned token has to be able to end and renew itself. Set `features.gate_auth_routes` to `false` to switch the whole thing off.
+`POST /auth/logout`, `POST /auth/refresh` and `POST /auth/session/claim` are never gated: they act on the calling session alone and grant nothing, and a pinned token has to be able to end, renew and claim itself. Set `features.gate_auth_routes` to `false` to switch the whole thing off.
 
 ## Responses
 

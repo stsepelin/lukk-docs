@@ -70,6 +70,9 @@ use App\Models\RefreshToken;
 Lukk::useRefreshTokenModel(RefreshToken::class);
 ```
 
+> [!WARNING]
+> **Keep `$timestamps` on.** [`claim_seconds`](/configuration#refresh-behavior) recognises a session's original refresh token by the fact that its row was never rotated, and reads `created_at` to decide whether the claim window has passed. A subclass that turns timestamps off leaves that column null, and the feature then revokes nothing at all — silently, apart from one warning per worker process.
+
 ## Swapping storage
 
 Refresh-token **storage** sits behind `Contracts\RefreshTokenRepository`, separate from the rotation **policy** (which lives in `Actions\RotateRefreshToken`). To move storage from the database to Redis, bind your own implementation — the policy is untouched:
@@ -80,6 +83,11 @@ use App\Auth\RedisRefreshTokenRepository;
 
 $this->app->bind(RefreshTokenRepository::class, RedisRefreshTokenRepository::class);
 ```
+
+Two fields on `RefreshTokenRecord` carry policy that the repository is the only thing able to supply, and both fail quietly if you leave them out:
+
+- **`createdAt`** — the row's creation time. It is how [`claim_seconds`](/configuration#refresh-behavior) recognises a session's never-rotated original refresh token. Return `null` and that revocation is disabled entirely (lukk logs one warning per worker process and carries on).
+- **`scope`** — the family's pinned [ability](/abilities) grant. `null` and `''` are different answers: `null` means *derive the grant on every mint*, `''` means *pinned to nothing*. Round-trip the empty string. Collapsing the two lets the most restricted token in the system widen to its subject's full grant on the first refresh.
 
 ## Reshaping responses
 
@@ -93,6 +101,18 @@ $this->app->bind(LoginResponse::class, MyLoginResponse::class);
 ```
 
 The response contracts are `LoginResponse`, `RefreshResponse`, `LogoutResponse`, and `TwoFactorChallengeResponse`.
+
+> [!WARNING]
+> **`LogoutResponse` takes `bool $clearRefreshCookie` (lukk 0.7.0), and a rebound implementation must honour it.** It is `false` when `POST /auth/logout` did not accept the refresh cookie from that request — none was presented, or the request had a shape a cross-site form could produce. Sending the clearing `Set-Cookie` anyway re-opens the forced-logout CSRF the check exists to close: a clearing cookie on a `204` is stored even after a fully cross-site top-level navigation, so any page could sign your visitors out.
+>
+> ```php
+> public function __construct(private readonly bool $clearRefreshCookie = true) {}
+> ```
+>
+> Read `cookie_mode` through `Lukk::guardConfig()` rather than the global config block, as the default does — read globally, a guard that opted into cookie mode is never sent the clear for the cookie its own login set.
+
+> [!NOTE]
+> **`DELETE /auth/sessions/others` no longer goes through `LogoutResponse`** (lukk 0.7.0). That route keeps the caller's session alive, while the contract's job is to end it — in cookie mode it cleared the caller's own refresh cookie, and the client could no longer refresh. It now answers a bare `204` directly: the same status and empty body as before, so no client changes, but a rebound `LogoutResponse` no longer applies there. It still shapes `POST /auth/logout` and `DELETE /auth/sessions`.
 
 > [!NOTE]
 > The default response shape is the contract the lukk-js clients consume. If you reshape it, keep the client in sync (or adapt it) so the two don't drift — see [Authentication](/authentication) and [Using lukk-core](/lukk-core).
