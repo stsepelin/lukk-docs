@@ -406,7 +406,7 @@ lukk: { session: { name: 'admin' } }
 | unset | `__Host-lukk-session` | `lukk-session` |
 | `'admin'` | `__Host-lukk-admin-session` | `lukk-admin-session` |
 
-Unset keeps the default names, so adding it to one app doesn't change the other. Only used in `bff` mode.
+Unset keeps the default names, so adding it to one app doesn't change the other. Only used in `bff` mode. The short-lived logout note cookie follows the same pattern (`__Host-lukk-logout`, `lukk-admin-logout`, …); its name reaches the browser as `runtimeConfig.public.lukk.logoutCookie`, so if you override `cookieSecure` at runtime, override that too.
 
 > [!WARNING]
 > `session.name` is **de-confliction, not a trust boundary.** Apps that share an origin — the same host with path routing, or `localhost` across ports — share one cookie jar, and the namespace only keeps their cookies from overwriting one another. The real isolation is the per-app [`session.password`](#session-password) (the seal): a co-hosted app can't decrypt or forge another app's session without its password. For apps in **distinct trust domains**, put them on **separate subdomains** — where the `__Host-` prefix plus the proxy's `Origin` check give real isolation — and give each a distinct, strong `session.password`.
