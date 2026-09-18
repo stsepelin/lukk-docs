@@ -123,6 +123,9 @@ To call your app API from a page or `useAsyncData`, use the auth-aware [`useLukk
 >
 > Both exist so the page load after a logout can finish it — see [Logging out](/authentication#logging-out-1). **Clearing `localStorage` on logout**, a common idiom, deletes the second one, and a note with no family then has no way to tell that a later sign-in has already superseded it: the next page load can end the **newer** session. If you clear storage on logout, `await logout()` first and leave lukk's two keys alone.
 
+> [!WARNING]
+> **Two co-hosted apps in direct mode share one session, whatever their scoping.** Both keys above are scoped per app (`app.baseURL`, plus `session.name` when set), which keeps one app's notes from reaching another's. In **BFF** mode that scoping is the whole story, because each app has its own sealed session cookie. In **direct** mode it is not: lukk issues a single `__Host-refresh` cookie for the origin, so `/shop/` and `/admin/` are the same session on the server no matter how their client-side keys are named. Signing out of one signs out of both, and a refresh in one rotates the token the other is holding. Give co-hosted direct-mode apps separate origins, or put them behind BFF.
+
 **Why choose it**
 
 - No runtime server required — it works for a **fully static site** served from a CDN.
