@@ -95,7 +95,7 @@ Content-Type: application/json
 { "challenge_token": "...", "code": "123456" }
 ```
 
-This returns the normal [token pair](/authentication#logging-in), carrying the claim `amr: ["pwd","otp"]` to record that two factors were used. The challenge is single-use and short-lived; a wrong code leaves it usable so the user can retry, and the endpoint is throttled per account.
+This returns the normal [token pair](/authentication#logging-in), carrying the claim `amr: ["pwd","otp"]` to record that two factors were used. The challenge is single-use and short-lived; a wrong code leaves it usable so the user can retry, and the endpoint is throttled per account. It is also bound to the password that was checked: if that password is changed or reset before the challenge is redeemed, redemption answers `422` on `challenge_token` and the user signs in again (lukk 0.7.0). A challenge minted by an earlier release — in the minutes around an upgrade — carries no such binding and is refused the same way.
 
 ```mermaid
 sequenceDiagram
