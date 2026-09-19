@@ -202,7 +202,7 @@ Rotation, reuse detection and the denylist are not switches: they are the securi
 | Feature | Default | Description |
 |---|---|---|
 | `logout_all` | `true` | Mount `DELETE /auth/sessions` ("log out everywhere"). Honoured from lukk 0.7.0; earlier releases ignored it. |
-| `two_factor` | `false` | Enable [two-factor authentication](/two-factor-authentication). Requires `pragmarx/google2fa`. |
+| `two_factor` | `false` | Enable [two-factor authentication](/two-factor-authentication). Requires `pragmarx/google2fa`. Honoured per guard. Only `false`, `0` or `'0'` stops enrolled accounts from being challenged; an unset or blank value fails closed. |
 | `lockout` | `false` | Enable the [account lockout](/account-lockout) — the NIST SP 800-63B §5.2.2 consecutive-failure cap. Requires the `lukk-lockout-migrations` migration. |
 | `change_password` | **`true`** | Enable [change password](/change-password) (`POST /auth/password`). On by default — it needs no configuration. |
 | `passkeys` | `false` | Enable [passkeys](/passkeys). Requires a WebAuthn library. |

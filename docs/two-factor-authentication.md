@@ -51,6 +51,8 @@ The trait manages the `two_factor_secret`, `two_factor_recovery_codes`, and `two
 
 These routes are registered only when `features.two_factor` is enabled.
 
+Switching the feature off takes a value somebody set: `false`, `0` or `'0'`. If the flag resolves to `null`, to `''` (a blank `.env` line) or is missing — for example a per-guard `'two_factor' => env('ADMIN_TWO_FACTOR')` with the variable unset — accounts that already enrolled are **still challenged**, and `POST /auth/two-factor-challenge` stays mounted so they can answer. The management routes stay off, so such an account can spend its recovery codes but not regenerate them. An unset flag is treated as a misconfiguration, not a decision to drop a factor the user opted into (lukk 0.7.0). Set it explicitly either way.
+
 | Method | Path | Middleware | Purpose |
 |---|---|---|---|
 | `POST` | `/auth/two-factor` | `auth` + confirm | Begin enrolment → `{ otpauth_uri, recovery_codes }` (shown once). |
