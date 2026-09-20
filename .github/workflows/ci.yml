@@ -15,9 +15,11 @@ permissions:
   pages: write
   id-token: write
 
-# Allow one concurrent deployment; don't cancel an in-progress production deploy.
+# Deploys serialize on one group, so a production publish is never interrupted. PR builds get a
+# group per branch: queued on the shared one, GitHub keeps only the newest PENDING run and cancels
+# the rest — three docs PRs opened together left one with no checks at all.
 concurrency:
-  group: pages
+  group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.ref) || 'pages' }}
   cancel-in-progress: false
 
 jobs:
