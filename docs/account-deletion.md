@@ -151,15 +151,18 @@ Everything lukk owns is still erased — only the row's fate changes.
 {
   "generated_at": "2026-03-04T05:06:07+00:00",
   "account": { "id": 1, "identifier": "subject@example.com" },
-  "sessions": [{ "session": "…", "guard": null, "created_at": "…", "expires_at": "…" }],
+  "sessions": [{ "session": "…", "created_at": "…", "last_rotated_at": "…", "revoked_at": null, "expires_at": "…" }],
   "passkeys": [{ "credential_id": "…", "name": "Yubikey at HQ", "last_used_at": 1787391978 }],
-  "two_factor": { "enabled": true, "confirmed_at": "…" }
+  "two_factor": { "enabled": true, "confirmed_at": "…" },
+  "lockouts": [{ "purpose": "login", "attempts": 3, "locked_at": null, "first_failed_at": 1787391000, "last_failed_at": 1787391978 }]
 }
 ```
 
+`lockouts` arrives with lukk 0.7.0: the [account-lockout](/account-lockout) counters held against the account, which erasure also deletes. It reports the purpose, the attempt count and Unix timestamps — never lukk's internal subject keys. A custom `LockoutRepository` must implement `summariesForSubjects()` to supply it.
+
 > [!WARNING]
-> **This is the auth slice, not a complete Art. 15 response.** lukk knows about sessions, passkeys
-> and whether two-factor is on. It knows nothing about the data your subject actually cares about.
+> **This is the auth slice, not a complete Art. 15 response.** lukk knows about sessions, passkeys,
+> lockout counters and whether two-factor is on. It knows nothing about the data your subject actually cares about.
 > Append your own before you hand it over — a half-answer that looks whole is worse than no
 > endpoint.
 

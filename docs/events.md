@@ -26,7 +26,8 @@ The event carries two readonly properties, `$familyId` and `$reason`. The `reaso
 | Reason | Meaning |
 |---|---|
 | `reuse` | A consumed token was replayed after the grace window — a successor already exists. The textbook theft signal. |
-| `revoked` | An already-revoked token was replayed. |
+
+A replayed token whose family is **already** revoked is rejected quietly, without this event — the family is gone, so there's nothing left to protect or report.
 
 > [!IMPORTANT]
 > The revoke-then-dispatch happens **after** the rotation transaction commits, so the family revocation and the event stay consistent. See [Tokens & Rotation](/tokens-and-rotation) for the reuse-detection mechanics and the grace window that keeps normal concurrency from tripping a false revoke.
@@ -72,7 +73,7 @@ The event carries `$userId` and `$credentialId`. A **zero** counter is never fla
 
 ### AccountLocked / AccountReleased
 
-When the opt-in [account lockout](/account-lockout) is on, `Lukk\Events\AccountLocked` fires the moment a consecutive-failure run hits the cap, and `Lukk\Events\AccountReleased` when a counter is cleared. Both carry `$purpose` (`login` or `two_factor`), `$subject`, and `$guard`:
+When the opt-in [account lockout](/account-lockout) is on, `Lukk\Events\AccountLocked` fires the moment a consecutive-failure run hits the cap, and `Lukk\Events\AccountReleased` when a counter is cleared. Both carry `$purpose` (`login`, `two_factor` or `confirm`), `$subject`, and `$guard`:
 
 ```php
 use Illuminate\Support\Facades\Event;

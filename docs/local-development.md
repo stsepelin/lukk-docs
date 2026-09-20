@@ -39,7 +39,7 @@ In direct-cookie mode the refresh token lives in a `__Host-refresh` cookie set b
 LUKK_COOKIE_SECURE=false
 ```
 
-`cookie.secure` (env `LUKK_COOKIE_SECURE`, default `true`) controls the refresh cookie's `Secure` attribute. When you set it `false`, lukk drops `Secure` **and** the `__Host-` prefix from the cookie name (the prefix requires `Secure`, so the browser would otherwise reject it) — the set, clear, and read sides all stay in sync. Leave it `true` (the default) everywhere else. See the [configuration reference](/configuration#cookie).
+`cookie.secure` (env `LUKK_COOKIE_SECURE`, default `true`) controls the refresh cookie's `Secure` attribute. When you set it `false`, lukk drops `Secure` **and** the `__Host-` prefix from the cookie name (the prefix requires `Secure`, so the browser would otherwise reject it) — the set, clear, and read sides all stay in sync. Leave it `true` (the default) everywhere else. See the [configuration reference](/configuration#output-mode).
 
 ## Why not just always relax it?
 

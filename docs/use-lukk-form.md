@@ -11,7 +11,7 @@ const form = useLukkForm(initialData, options?)
 `useLukkForm` returns a single reactive object. The **fields live under `form.data`** (not spread onto the form itself), so a field may safely be named `errors`, `processing`, or `submit`. Every `useLukkForm()` call is an independent form.
 
 > [!IMPORTANT]
-> **URLs resolve against your app's API base**, not lukk's auth base — `api.target` in `direct` mode, the [proxy mount](/transport-modes#bff) in `bff` mode. `form.post('/register')` reaches **your** `/register`, not lukk's `POST /auth/register`.
+> **URLs resolve against your app's API base**, not lukk's auth base — `api.target` in `direct` mode, the [proxy mount](/transport-modes#bff-mode) in `bff` mode. `form.post('/register')` reaches **your** `/register`, not lukk's `POST /auth/register`.
 >
 > That's the intended split: `useLukkForm` and [`useLukkFetch`](/use-lukk-fetch) are for endpoints you own; lukk's own auth endpoints are reached through the composables ([`useLukkAuth`](/authentication#uselukkauth), [`useLukkChangePassword`](/change-password), and friends), which hold the right base. To show a lukk `422` on your fields, catch the `LukkError` and read its `errors` bag — see [Change Password](/change-password#showing-validation-errors) for the pattern.
 
@@ -216,7 +216,7 @@ await form.post('/password') // YOUR route — not lukk's POST /auth/password
 
 ## File Uploads
 
-Put a `File` or `Blob` anywhere in `form.data` and the submit is **automatically sent as `multipart/form-data`** — nested keys are flattened Laravel-style (`avatar`, `tags[0]`, `meta[views]`), booleans become `'1'`/`'0'`, and `Date`s become ISO strings. The [BFF proxy streams the upload](/transport-modes#bff).
+Put a `File` or `Blob` anywhere in `form.data` and the submit is **automatically sent as `multipart/form-data`** — nested keys are flattened Laravel-style (`avatar`, `tags[0]`, `meta[views]`), booleans become `'1'`/`'0'`, and `Date`s become ISO strings. The [BFF proxy streams the upload](/transport-modes#bff-mode).
 
 ```vue
 <script setup lang="ts">

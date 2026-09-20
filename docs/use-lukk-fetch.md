@@ -1,6 +1,6 @@
 # useLukkFetch
 
-The [BFF proxy](/transport-modes#bff) authenticates the *transport*; you still need a *client* that sends the session correctly in every context. A plain `$fetch('/api/...')` works in the browser but **forwards no cookie during SSR** — so the same call, server-rendered, returns a silent `401`. `useLukkFetch()` gets this right in client, SSR, and server-route contexts.
+The [BFF proxy](/transport-modes#bff-mode) authenticates the *transport*; you still need a *client* that sends the session correctly in every context. A plain `$fetch('/api/...')` works in the browser but **forwards no cookie during SSR** — so the same call, server-rendered, returns a silent `401`. `useLukkFetch()` gets this right in client, SSR, and server-route contexts.
 
 ```ts
 const api = useLukkFetch()
