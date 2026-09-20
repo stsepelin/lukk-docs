@@ -51,6 +51,8 @@ The trait manages the `two_factor_secret`, `two_factor_recovery_codes`, and `two
 
 These routes are registered only when `features.two_factor` is enabled.
 
+Switching the feature off takes a value somebody set: `false`, `0` or `'0'`. If the flag resolves to `null`, to `''` (a blank `.env` line) or is missing — for example a per-guard `'two_factor' => env('ADMIN_TWO_FACTOR')` with the variable unset — accounts that already enrolled are **still challenged**, and `POST /auth/two-factor-challenge` stays mounted so they can answer. The management routes stay off, so such an account can spend its recovery codes but not regenerate them. An unset flag is treated as a misconfiguration, not a decision to drop a factor the user opted into (lukk 0.7.0). Set it explicitly either way.
+
 | Method | Path | Middleware | Purpose |
 |---|---|---|---|
 | `POST` | `/auth/two-factor` | `auth` + confirm | Begin enrolment → `{ otpauth_uri, recovery_codes }` (shown once). |
@@ -93,7 +95,7 @@ Content-Type: application/json
 { "challenge_token": "...", "code": "123456" }
 ```
 
-This returns the normal [token pair](/authentication#logging-in), carrying the claim `amr: ["pwd","otp"]` to record that two factors were used. The challenge is single-use and short-lived; a wrong code leaves it usable so the user can retry, and the endpoint is throttled per account.
+This returns the normal [token pair](/authentication#logging-in), carrying the claim `amr: ["pwd","otp"]` to record that two factors were used. The challenge is single-use and short-lived; a wrong code leaves it usable so the user can retry, and the endpoint is throttled per account. It is also bound to the password that was checked: if that password is changed or reset before the challenge is redeemed, redemption answers `422` on `challenge_token` and the user signs in again (lukk 0.7.0). A challenge minted by an earlier release — in the minutes around an upgrade — carries no such binding and is refused the same way.
 
 ```mermaid
 sequenceDiagram
