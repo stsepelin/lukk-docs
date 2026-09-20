@@ -49,17 +49,19 @@ The `iss` and `aud` claims stamped into every token and validated on every reque
 
 ```php
 'grace_seconds' => (int) env('LUKK_GRACE', 30),
+'claim_seconds' => (int) env('LUKK_CLAIM_SECONDS', 0),
 'leeway' => (int) env('LUKK_LEEWAY', 5),
 ```
 
 | Key | Default | Description |
 |---|---|---|
 | `grace_seconds` | `30` | The overlap window during which a just-rotated token is still tolerated, so concurrent refreshes (multiple tabs, SSR + hydration) do not trip reuse detection. Within this window the old token yields a full token pair — a sibling refresh token in the same session, which must be stored — see [Authentication → Refreshing tokens](/authentication#refreshing-tokens). |
+| `claim_seconds` | `0` (off) | **lukk 0.7.0.** A session a sign-in starts must be *claimed* within this window — by `POST /auth/session/claim`, an authenticated request to this lukk app, or a refresh. If it isn't, the first late use of the credential issued at sign-in revokes the whole session and fires [`SessionUnclaimed`](/events#sessionunclaimed). It ends sessions whose sign-in response never reached the client (a dropped connection, an aborted request), which otherwise stay alive until their refresh token expires. `600` suits most apps.<br><br>**The contract:** every client must claim within the window. lukk-js calls the claim route right after each sign-in. A client that uses its access token only on *another* service never touches this app, so it must call the route too. Only the original sign-in credential is ever revoked: a token minted by a later refresh counts as a claim. For a refresh token that is exact — the family's first row, the one with no predecessor — while an access token, which carries no lineage, is matched on its `iat` within a couple of seconds of the sign-in. The window is never shorter than `access_ttl` + `leeway`, or 60 seconds. Sessions with a pinned grant (personal access tokens, impersonation) are never marked. A replacement `RefreshTokenRepository` must return [`original`](/customization#swapping-storage) on its records (or, less precisely, `createdAt`); with neither, a late original refresh token isn't recognised (it fails open, with a warning logged once per worker process). Markers live in the denylist cache: losing them fails open, and restoring an old snapshot can at most revoke a session still presenting its original refresh token after the window. Costs one cache read per authenticated request when on, none when off. |
 | `leeway` | `5` | Clock-skew tolerance, in seconds, applied when validating the `exp` and `nbf` claims. |
 
 ### Rate limits
 
-Every throttle lives here, each shaped as `{ max_attempts, decay_seconds }` (login adds `ip_max_attempts` and `account_max_attempts`), plus one scalar — `ipv6_prefix` — that applies to them all:
+The configurable throttles live here, each shaped as `{ max_attempts, decay_seconds }` (login adds `ip_max_attempts` and `account_max_attempts`), plus one scalar — `ipv6_prefix` — that applies to them all. Two more buckets exist without a key of their own; they [borrow `refresh`](#throttles-without-a-key-of-their-own) and are described below the table.
 
 ```php
 'rate_limits' => [
@@ -83,6 +85,13 @@ Every throttle lives here, each shaped as `{ max_attempts, decay_seconds }` (log
 These bound a **rate**, not a run: the window keeps resetting, so `account_max_attempts` at 20/60s permits ~1,200 failures an hour indefinitely. The separate, opt-in [account lockout](/account-lockout) is what caps *consecutive* failures (NIST SP 800-63B §5.2.2).
 
 Each maps to a named limiter (`lukk-refresh`, `lukk-passkeys`, `lukk-2fa`) you can also override with your own `RateLimiter::for()`. Tune any of them with the matching env vars — `LUKK_REFRESH_MAX_ATTEMPTS`, `LUKK_2FA_DECAY`, and so on.
+
+#### Throttles without a key of their own
+
+Two buckets read `rate_limits.refresh` rather than owning a key, because each is at most one call per session and a second knob would be one more thing to get wrong. They are separate *buckets*, though — neither shares counters with `POST /auth/refresh`, so junk refresh traffic from one address can't refuse them.
+
+- **The logout refresh-token lookup** (lukk 0.7.0), keyed per guard and per caller. `POST /auth/logout` has no route throttle; what is metered is the lookup of a presented refresh token, and only when it comes up empty or names an already-revoked family. A logout that ends a live session costs nothing, and one carrying a valid access token skips the bucket entirely. Exhausted, it answers `429` with `Retry-After` before looking anything up — see [Authentication → Logging out](/authentication#logging-out).
+- **The claim route** (`lukk-claim`, and `lukk-{guard}-claim` on an extra guard), which gates `POST /auth/session/claim`. Keyed per **user**, not per address: every call is already authenticated, and an address-keyed bucket is the one a NAT or a BFF shares. It falls back to the caller's address only when no user resolves.
 
 **What "keyed on IP" actually means.** Every throttle buckets on `Lukk::rateLimitKey()`, which is the caller's address with IPv6 collapsed to **`ipv6_prefix`** (default `/64`, env `LUKK_RATE_LIMIT_IPV6_PREFIX`). A subscriber is typically handed a whole `/64`, so keying on the full address would let one visitor mint effectively unlimited buckets and walk through every per-IP limit. IPv4 is used as-is, and addresses that embed IPv4 (IPv4-mapped, NAT64's `64:ff9b::/96`) are unwrapped rather than masked — otherwise a whole translated client population would share one counter. Raise it toward `128` if your users share a `/64` (an office or campus LAN does); lower it if your attackers hold larger delegations.
 
@@ -201,8 +210,8 @@ Rotation, reuse detection and the denylist are not switches: they are the securi
 | `password_reset` | `false` | Enable [password reset](/password-reset). |
 | `registration` | `false` | Enable [registration](/registration). |
 
-> [!WARNING]
-> The rotation, reuse-detection, and denylist features are the security core of the package. Disable them only if you fully understand the consequence.
+> [!NOTE]
+> Rotation, reuse detection and the denylist are **not** in this table, and there is no switch for them: they are the security model, not a feature. The `rotation` / `reuse_detection` / `denylist` keys older releases listed were never read, and 0.7.0 removes them.
 
 ### Two-factor
 
@@ -350,6 +359,9 @@ Set `false` to keep the client-only restore. No effect in `direct` mode (there's
 > [!NOTE]
 > Enabling this (the default) means SSR `user` is now populated in BFF mode where it was previously `null` until client hydration. Review any page that assumed the server always renders anonymous.
 
+> [!NOTE]
+> **Not on a route behind a `swr`/`isr`/`cache` rule.** Nitro hands a cached handler a request cloned with only the rule's `varies` headers, so with the default `varies` that render never sees the session cookie: the HTML is anonymous, and the client restores after hydration. It also means `ssrHydrate` has no effect on those routes. Add the cookie to the rule (`cache: { varies: ['cookie'] }`) if you need the user in the cached HTML — the whole `Cookie` header then joins the cache key, so entries fragment per browser rather than per session, and a per-user render is held in the server-side cache for the rule's window. See [Transport Modes → SSR hydration](/transport-modes#ssr-hydration).
+
 ### `user.endpoint`
 
 ```ts
@@ -399,12 +411,21 @@ Namespaces the BFF sealed-session cookie so **multiple lukk apps can share a hos
 lukk: { session: { name: 'admin' } }
 ```
 
-| `session.name` | Secure (prod / `--https`) | Dev over http |
-|---|---|---|
-| unset | `__Host-lukk-session` | `lukk-session` |
-| `'admin'` | `__Host-lukk-admin-session` | `lukk-admin-session` |
+Three cookies carry the namespace — the sealed session, and the two that drive a [logout](/authentication#logging-out-1):
 
-Unset keeps the default names, so adding it to one app doesn't change the other. Only used in `bff` mode.
+| Cookie | `session.name` | Secure (prod / `--https`) | Dev over http |
+|---|---|---|---|
+| Sealed session | unset | `__Host-lukk-session` | `lukk-session` |
+| Sealed session | `'admin'` | `__Host-lukk-admin-session` | `lukk-admin-session` |
+| Logout note | unset | `__Host-lukk-logout` | `lukk-logout` |
+| Logout note | `'admin'` | `__Host-lukk-admin-logout` | `lukk-admin-logout` |
+| Signed-out answer | unset | `__Host-lukk-signed-out` | `lukk-signed-out` |
+| Signed-out answer | `'admin'` | `__Host-lukk-admin-signed-out` | `lukk-admin-signed-out` |
+
+Unset keeps the default names, so adding it to one app doesn't change the other. The cookies are `bff`-only, but the name is read in **both** modes: it also scopes the cross-tab lock, the broadcast channel and direct mode's per-tab notes. The **logout note** is written by the browser the moment `logout()` is called and lives a minute; the **signed-out answer** is the server's reply to it and lives ten seconds. Both are `Path=/`, `SameSite=Strict`, and `Secure` exactly where the name carries `__Host-`. Neither is `HttpOnly` — the browser writes the first and reads the second — and neither carries anything: their presence is the whole message. Their names reach the browser as `runtimeConfig.public.lukk.logoutCookie` and `runtimeConfig.public.lukk.signedOutCookie`, so if you override `cookieSecure` at runtime, override both of those too.
+
+> [!WARNING]
+> **Co-hosted apps need a distinct `session.name`.** Everything that keeps two apps on one origin apart is named from it: the cookies, and — together with [`app.baseURL`](https://nuxt.com/docs/api/nuxt-config#baseurl) — the cross-tab Web Lock, the `BroadcastChannel` and the direct-mode web-storage keys. Leave both the same and one app's pending-logout note is read by the other, which then ends a session it doesn't own, while their tabs queue behind each other's lock for no reason.
 
 > [!WARNING]
 > `session.name` is **de-confliction, not a trust boundary.** Apps that share an origin — the same host with path routing, or `localhost` across ports — share one cookie jar, and the namespace only keeps their cookies from overwriting one another. The real isolation is the per-app [`session.password`](#session-password) (the seal): a co-hosted app can't decrypt or forge another app's session without its password. For apps in **distinct trust domains**, put them on **separate subdomains** — where the `__Host-` prefix plus the proxy's `Origin` check give real isolation — and give each a distinct, strong `session.password`.
@@ -438,7 +459,7 @@ nitro: {
 
 ### `clientIpHeader`
 
-**The problem it solves.** In BFF mode every upstream call is a fresh connection from your Nitro server, so the address your API sees is the *proxy*, not the visitor. Anything keying on `$request->ip()` therefore treats your entire user base as one identity — a `throttle:5,1` on a public form becomes **5 requests per minute globally**, and one user can lock out everyone else. lukk's own auth throttles (`login`, `forgot-password`, `two-factor-challenge`, and `refresh` at 30/60s) collapse the same way.
+**The problem it solves.** In BFF mode every upstream call is a fresh connection from your Nitro server, so the address your API sees is the *proxy*, not the visitor. Anything keying on `$request->ip()` therefore treats your entire user base as one identity — a `throttle:5,1` on a public form becomes **5 requests per minute globally**, and one user can lock out everyone else. lukk's own auth throttles (`login`, `forgot-password`, `two-factor-challenge`, `refresh` at 30/60s, and the [logout refresh-token lookup](#throttles-without-a-key-of-their-own) that borrows `refresh`'s limits) collapse the same way. The logout bucket is the one to watch after a "log out everywhere": the BFF's own background revokes of replaced sessions count against it like any visitor's retried logout. The claim route is the exception — it keys on the authenticated user, so it is unaffected.
 
 Blanking the browser-settable forwarding headers is the right default — otherwise any client could claim any IP and defeat your rate limiting. This option is how you say *"this hop is trusted"* when it genuinely is:
 

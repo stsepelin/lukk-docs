@@ -32,11 +32,13 @@ sequenceDiagram
 
 The proxy also refreshes server-side: when a forwarded request comes back `401`, it uses the stored refresh token to mint a new pair, re-seals it, and retries — all without the browser noticing.
 
-The proxy also **holds the step-up confirmation token server-side** (it strips it from confirm responses and injects the `X-Lukk-Confirmation` header itself) — so in BFF mode *no* credential, not even the confirmation token, ever reaches the browser.
+The proxy also **holds the step-up confirmation token server-side** (it strips it from confirm responses and injects the `X-Lukk-Confirmation` header itself), so neither of the two long-lived credentials nor the step-up proof reaches the browser.
+
+One credential still does: the **two-factor login challenge token**. It is issued before any session exists, so there is no sealed session to put it in, and the browser has to hand it back to `/two-factor-challenge`. It is short-lived (`two_factor.challenge_ttl`, five minutes by default), single-use, account-throttled, and never written into the SSR payload — lukk-nuxt keeps it client-side only, because a `useState` written during a server render serialises into `__NUXT_DATA__`, and at that point in the flow there is no session cookie, so nothing marks that page `no-store`.
 
 **Why choose it**
 
-- The browser holds **no token** (access, refresh, or confirmation), so XSS can't exfiltrate one.
+- The browser holds **no session token** (access, refresh, or confirmation), so XSS can't exfiltrate one. Two short-lived, non-credential cookies do reach it — the [logout note and the signed-out answer](/configuration#session-name) — and neither carries a value.
 - Clean SSR: the server reads the sealed session and hydrates both the authenticated **data** and the auth **state** (`user` / `loggedIn`), so authenticated pages render logged-in on the first paint — no flash, no `<ClientOnly>` (see [SSR hydration](#ssr-hydration)).
 - No CORS — the browser only talks to your own origin.
 
@@ -49,7 +51,7 @@ The proxy also **holds the step-up confirmation token server-side** (it strips i
 - lukk in body mode (`LUKK_COOKIE_MODE=false`, its default), so the proxy receives the refresh token to seal.
 
 > [!NOTE]
-> **Throttling & `grace_seconds`.** Every user's auth traffic egresses from the BFF server's IP, so lukk's *per-IP* refresh/login [throttles](/configuration#rate-limits) collapse onto one address. Set [`clientIpHeader`](/configuration#clientipheader) so the real client is forwarded, rather than raising the limits — an inflated limit becomes a per-attacker budget once forwarding works. Keep lukk's `grace_seconds > 0` (its default 30s): the proxy single-flights refresh, but a zero grace window turns any concurrent refresh into a full-family [revocation](/tokens-and-rotation#reuse-detection).
+> **Throttling & `grace_seconds`.** Every user's auth traffic egresses from the BFF server's IP, so lukk's *per-IP* refresh/login [throttles](/configuration#rate-limits) collapse onto one address — including the [logout refresh-token lookup](/configuration#throttles-without-a-key-of-their-own), which the proxy's own background revokes of replaced sessions also count against. (The claim route keys on the authenticated user, so it isn't affected.) Set [`clientIpHeader`](/configuration#clientipheader) so the real client is forwarded, rather than raising the limits — an inflated limit becomes a per-attacker budget once forwarding works. Keep lukk's `grace_seconds > 0` (its default 30s): the proxy single-flights refresh, but a zero grace window turns any concurrent refresh into a full-family [revocation](/tokens-and-rotation#reuse-detection).
 
 > [!WARNING]
 > **Keep the sealed session under ~4 KB (a claims budget).** The `__Host-lukk-session` cookie holds the access JWT *plus* the refresh and confirmation tokens and a session id (about 45 bytes), iron-sealed (which inflates the payload ~1.34× on top of a fixed envelope). Per [RFC 6265bis §5.6](https://httpwg.org/specs/rfc6265bis.html#section-5.6) a browser **silently drops** any cookie whose `name`+`value` exceeds **4096 octets** — so if a bloated access token pushes the seal over the line, login appears to succeed but the cookie never persists and every following request is anonymous. This only bites when your backend embeds a large claim set via [`Lukk::tokenClaimsUsing`](/customization) (many roles/permissions/tenant data). Keep custom claims lean — put bulky authorization data behind an API lookup keyed by `sub`, not in the token. lukk-nuxt emits a one-line `console.warn` as the sealed session nears the limit so you catch it in development.
@@ -66,6 +68,9 @@ Security properties:
 - **`no-store` on per-user renders.** Any render for a request carrying a real session is marked `Cache-Control: no-store` — including one that ends up not hydrating (a replaced session), since components can still render that account's data — so a shared cache/CDN can't serve one user's render to another (the sealed cookie header alone does **not** prevent caching — RFC 6265bis §5.6).
 - **Fails safe.** An anonymous, tampered, or expired-seal request hydrates as logged-out with no side effects (no minted cookie, no 500). An access token that's *expired at render time* is refreshed once and the session re-sealed in place — onto both the page response and the in-process request, so the same render never replays the rotated refresh token. A session that can't be refreshed, or a user endpoint that fails on the server, defers to the client restore; such a render leaves [`ready`](/authentication#waiting-for-the-session-ready) `false` so your code doesn't mistake it for an anonymous visitor.
 - **`direct` mode is unaffected** — the access token lives in client memory only, so there's no server session to hydrate from; direct-mode pages stay client-hydrated.
+
+> [!NOTE]
+> **A route behind a `swr`/`isr`/`cache` rule renders signed out.** This is Nitro's behaviour, not lukk's: it hands the cached handler a request cloned with only the rule's `varies` headers, so with the default `varies` the render never sees the session cookie — the HTML is anonymous whatever the visitor brought, and a server-side call the page makes through the app-API proxy is unauthenticated. The client restores after hydration, so the visitor does end up signed in, but `ssrHydrate` buys you nothing on those routes. It is also why such a page has nothing per-visitor to replay to the next one — a property of Nitro's current behaviour rather than a promise lukk can make, which is why the browser suite pins it. Note the request is not untouched: lukk's logout middleware runs on it like any other, so a visitor finishing a logout still gets their `Set-Cookie` and a `Vary: Cookie`. To have a cached page show the user, add the cookie to the rule (`cache: { varies: ['cookie'] }`) — which puts it in the cache key too, so entries become per session rather than shared; weigh that against [what a cache further downstream does with them](/authentication#what-ready-deliberately-doesn-t-do).
 
 > [!NOTE]
 > **Additive, but a behavior change from ≤ 0.3.** SSR `useLukkAuth().user` used to be `null` on the server (populated only after client hydration); it is now populated during SSR in BFF mode. If a page special-cased "always anonymous on the server", review it (or set `ssrHydrate: false`).
@@ -107,6 +112,19 @@ To call your app API from a page or `useAsyncData`, use the auth-aware [`useLukk
 ## Direct Mode
 
 `mode: 'direct'`. The client in the browser calls lukk directly — there is no proxy. The access token is kept **in memory** (never in `localStorage`), and the refresh token lives in lukk's hardened `__Host-refresh` cookie (HttpOnly, Secure, `SameSite=Strict`), which the browser sends automatically on refresh.
+
+> [!NOTE]
+> **What lukk-js does write to web storage.** No token, but not nothing. Two keys, both scoped to your [`app.baseURL`](/configuration#session-name) so co-hosted apps stay apart:
+>
+> | Key | Store | Holds |
+> |---|---|---|
+> | `lukk:logging-out:<app.baseURL>[#<session.name>]` | `sessionStorage` (direct only) | A logout started but not known to have finished: the moment it was asked for, and the session's refresh-token family (`fid`) when one was known. One minute. |
+> | `lukk:signed-in-at:<app.baseURL>[#<session.name>]` | `localStorage` (**both** transports) | When a sign-in was last *sent*, in any tab. Read by **every** logout, in both transports, right before it sends: a sign-in recorded since that logout was asked for stands it down. |
+>
+> Both exist so the page load after a logout can finish it — see [Logging out](/authentication#logging-out-1). **Clearing `localStorage` on logout**, a common idiom, deletes the second one, and a note with no family then has no way to tell that a later sign-in has already superseded it: the next page load can end the **newer** session. If you clear storage on logout, `await logout()` first and leave lukk's two keys alone.
+
+> [!WARNING]
+> **Two co-hosted apps in direct mode share one session, whatever their scoping.** Both keys above are scoped per app (`app.baseURL`, plus `session.name` when set), which keeps one app's notes from reaching another's. In **BFF** mode that scoping is the whole story, because each app has its own sealed session cookie. In **direct** mode it is not: lukk issues a single `__Host-refresh` cookie for the origin, so `/shop/` and `/admin/` are the same session on the server no matter how their client-side keys are named. Signing out of one signs out of both, and a refresh in one rotates the token the other is holding. Give co-hosted direct-mode apps separate origins, or put them behind BFF.
 
 **Why choose it**
 
