@@ -67,7 +67,7 @@ const lukk = createLukkClient({
 })
 ```
 
-`RefreshOutcome` is `TokenPair | typeof REFRESHED_WITHOUT_TOKEN | null`. lukk-nuxt's BFF mode uses it, which is how a `401` is now retried there once the proxy has renewed the session (lukk-core 0.12.0); its `$lukkRefresh` and `$lukkRestore` resolve to the symbol in BFF mode (both still truthy on success) and are typed `() => Promise<RefreshOutcome>`.
+`RefreshOutcome` is `TokenPair | typeof REFRESHED_WITHOUT_TOKEN | null`. lukk-nuxt's BFF mode uses it, which is how a `401` is now retried there once the proxy has renewed the session (lukk-core 0.12.0); its `$lukkRefresh` resolves to the symbol in BFF mode (still truthy on success) and is typed `() => Promise<RefreshOutcome>`, and `$lukkRestore` resolves to `{ pair, unavailable, superseded? }`, whose `pair` is that outcome.
 
 ## Methods
 

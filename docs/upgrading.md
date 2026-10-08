@@ -118,8 +118,8 @@ The same release (with `lukk-core` 0.12.0) also changes:
 
 - **The `Amr` type** is `'pwd' | 'otp' | 'pop' | 'user' | 'mfa'`; `'webauthn'` is gone, to match lukk 0.7.0.
 - **`refresh` hooks** are typed `() => Promise<RefreshOutcome>` and may return
-  [`REFRESHED_WITHOUT_TOKEN`](/lukk-core#renewed-without-a-token). `$lukkRefresh` and `$lukkRestore`
-  resolve to that symbol in BFF mode rather than the proxy's `{ ok, expires_in }`.
+  [`REFRESHED_WITHOUT_TOKEN`](/lukk-core#renewed-without-a-token). `$lukkRefresh` resolves to that
+  symbol in BFF mode rather than the proxy's `{ ok, expires_in }`, and so does the `pair` of `$lukkRestore`'s result.
 - **The app-API proxy answers `404` for lukk's own routes.** If your client reached lukk through
   `/api/...`, use the composables. If lukk sits at the root of `api.target`'s host, the proxy refuses
   everything — [move lukk under a prefix](/configuration#api-bff-app-api-proxy).
