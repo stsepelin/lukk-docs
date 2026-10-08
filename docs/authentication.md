@@ -44,7 +44,7 @@ On success you receive a token pair (the exact shape depends on the [output mode
 
 Wrong credentials return `422`. Lukk's login is **constant-time**: an unknown email runs the same hashing work as a wrong password, so neither timing nor response shape reveals which accounts exist. From lukk 0.7.0 a failed sign-in is also padded to [`login_timebox_micros`](/configuration#sign-in-timebox) (500 ms by default), so expect a failure to take at least that long; a success returns as soon as it's done.
 
-Repeated failures are throttled per account and per IP ([rate limits](/configuration#rate-limits)), returning `429`. The account is the one the identifier resolves to, so a look-alike address belonging to another account has its own count (lukk 0.7.0). Those bound a rate; if you also need the NIST SP 800-63B §5.2.2 cap on *consecutive* failures, enable the opt-in [account lockout](/account-lockout), which answers `423` instead.
+Repeated failures are throttled per account and per IP ([rate limits](/configuration#rate-limits)), returning `429`. From lukk 0.7.0 failures count against the account the identifier resolves to as well as against the folded identifier, so a look-alike address belonging to another account cannot reset this account's count. Those bound a rate; if you also need the NIST SP 800-63B §5.2.2 cap on *consecutive* failures, enable the opt-in [account lockout](/account-lockout), which answers `423` instead.
 
 > [!NOTE]
 > If the user has confirmed [two-factor authentication](/two-factor-authentication) or you require [passkeys](/passkeys), login returns a challenge instead of tokens. See those pages for the second step.
