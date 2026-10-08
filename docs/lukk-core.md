@@ -97,7 +97,7 @@ lukk.regenerateRecoveryCodes()
 lukk.passkeyRegistrationOptions()
 lukk.registerPasskey(credential, name?)
 lukk.passkeyLoginOptions()              // → { ceremony_id, options }
-lukk.loginWithPasskey(ceremonyId, credential)
+lukk.loginWithPasskey(ceremonyId, credential) // → TokenPair, or a TwoFactorChallenge (lukk ≥ 0.7)
 lukk.listPasskeys()                     // → { passkeys: PasskeySummary[] }
 lukk.deletePasskey(credentialId)
 ```

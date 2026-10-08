@@ -118,8 +118,7 @@ The last row is deliberately not `mfa`. A TOTP is possession too (NIST SP 800-63
 
 `passkeys.user_verification` is still what lukk *asks* the authenticator for at login. It no longer decides whether the second factor is skipped: config is what was asked for, the assertion is what happened.
 
-> [!NOTE]
-> lukk-js's `useLukkPasskeys().login()` expects a token pair. It does not yet surface the two-factor challenge that a single-factor passkey on a TOTP-enrolled account now gets. With the default `user_verification: required`, a passkey registered with user verification gives a multi-factor assertion and never reaches that branch.
+In lukk-js, `useLukkPasskeys().login()` resolves to that answer (lukk-nuxt 0.12). On a challenge it sets `pendingTwoFactor` and loads no user; complete it with `useLukkAuth().verifyTwoFactor()`, exactly as after a password sign-in.
 
 ### Managing passkeys
 

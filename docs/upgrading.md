@@ -131,3 +131,6 @@ The same release (with `lukk-core` 0.12.0) also changes:
 - **`useLukkForm` drafts** move to `lukk:form:<rememberKey>`; a draft under the old key isn't carried over.
 - **`useLukkPasskeys().confirm()`** uses lukk 0.7.0's step-up options, falling back to the login options
   on a `404` from an older lukk.
+- **`useLukkPasskeys().login()`** resolves to a `LoginResult`. When lukk 0.7.0 answers a single-factor
+  passkey with a two-factor challenge, `pendingTwoFactor` turns true and no user is loaded: show the same
+  code form as after a password sign-in.
