@@ -47,6 +47,44 @@ impact tags. Read it (and the changelog) before bumping:
 > [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md).
 
 > [!WARNING]
+> **lukk `0.7.0` changes the `amr` claim and how a passkey is trusted.** High impact if anything reads
+> `amr` — a gateway, a resource server, or your own gates.
+>
+> - **`amr` uses only [RFC 8176 values](/tokens-and-rotation#the-amr-claim).** A passkey is
+>   `["pop","user"]`, plus `"mfa"` when the assertion was multi-factor; password + TOTP is
+>   `["pwd","otp","mfa"]`; a single-factor passkey + TOTP is `["pop","user","otp"]`, without `mfa`.
+>   `webauthn` is gone: replace a check for it with `pop`, and "was this multi-factor" with `mfa`.
+> - **`amr` now survives refresh**, stored in a new `refresh_tokens.amr` column. The column went into
+>   the existing core migration, so a fresh install gets it. An install that already ran that migration
+>   adds it with a migration of its own — until then nothing breaks, the claim just disappears after
+>   the first refresh as before:
+>
+>   ```php
+>   Schema::table('refresh_tokens', function (Blueprint $table) {
+>       $table->text('amr')->nullable();
+>   });
+>   ```
+>
+>   A custom [`RefreshTokenRepository`](/customization#swapping-storage) (or a subclass overriding
+>   `persist()`) must add the trailing `?string $amr = null` argument and round-trip it.
+> - **A passkey stands in for an enrolled TOTP only when the assertion was multi-factor** — UV flag on a
+>   credential already `uvInitialized`, [decided per assertion](/passkeys#when-a-passkey-counts-as-multi-factor),
+>   no longer by `user_verification`. Otherwise passkey login answers a two-factor challenge. A custom
+>   [`WebAuthnCeremony`](/customization#available-contracts) must adopt the new signatures.
+> - **Passkey step-up** must meet the account's highest available level. Use the new
+>   `POST /auth/confirm-passkey/options`; a refused step-up is `422` on `credential`, not `403`.
+>
+> Smaller ones to check: a failed sign-in now takes at least [`login_timebox_micros`](/configuration#sign-in-timebox)
+> (500 ms) and every `forgot-password` at least `password_reset.timebox_micros` (one second) — raise
+> either if your slowest real path takes longer, and queue the reset notification. Login failure
+> buckets key on the account, so existing ones are orphaned on deploy (at most one decay window of
+> counting). Non-account lockout subjects are stored as `idn:sha256:<digest>`. [Authenticator
+> events](/events#authenticator-events) are new — listen and notify the user. `features.logout_all`
+> is now honoured, and `features.rotation` / `reuse_detection` / `denylist` are removed (they were
+> never read). `LockoutRepository` gained `summariesForSubjects()`. See
+> [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md) for each with its impact tag.
+
+> [!WARNING]
 > **lukk `0.6.0` adds a `guard` column to `passkeys`** and turns **account deletion on by default**.
 >
 > The column is folded into the existing passkeys migration, so a **fresh install needs no action**
@@ -75,3 +113,21 @@ which needs a `LukkUser` augmentation. `LukkAuth` also becomes a global auto-imp
 `lukk-auth` now defers rather than redirecting during a server render that couldn't identify the
 visitor. Each with its migration step in
 [lukk-js UPGRADE.md](https://github.com/stsepelin/lukk-js/blob/main/UPGRADE.md).
+
+The same release (with `lukk-core` 0.12.0) also changes:
+
+- **The `Amr` type** is `'pwd' | 'otp' | 'pop' | 'user' | 'mfa'`; `'webauthn'` is gone, to match lukk 0.7.0.
+- **`refresh` hooks** are typed `() => Promise<RefreshOutcome>` and may return
+  [`REFRESHED_WITHOUT_TOKEN`](/lukk-core#renewed-without-a-token). `$lukkRefresh` and `$lukkRestore`
+  resolve to that symbol in BFF mode rather than the proxy's `{ ok, expires_in }`.
+- **The app-API proxy answers `404` for lukk's own routes.** If your client reached lukk through
+  `/api/...`, use the composables. If lukk sits at the root of `api.target`'s host, the proxy refuses
+  everything — [move lukk under a prefix](/configuration#api-bff-app-api-proxy).
+- **Sealed sessions expire** after [`session.maxAge`](/configuration#session-maxage) (30 days); keep it at
+  least lukk's `refresh_ttl`. The auth proxy refuses bodies over [`bodyLimit`](/configuration#bodylimit)
+  (1 MiB) with `413`, and chunked bodies with `411`.
+- **`useLukkFetch` in direct-mode SSR** no longer sends the visitor's cookies to an absolute API base,
+  no longer trusts `Host` on the server, and keeps an `Accept` you set. See [useLukkFetch](/use-lukk-fetch).
+- **`useLukkForm` drafts** move to `lukk:form:<rememberKey>`; a draft under the old key isn't carried over.
+- **`useLukkPasskeys().confirm()`** uses lukk 0.7.0's step-up options, falling back to the login options
+  on a `404` from an older lukk.
