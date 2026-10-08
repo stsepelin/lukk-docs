@@ -44,6 +44,14 @@ One credential still does: the **two-factor login challenge token**. It is issue
 
 **The CSRF trade-off.** Moving tokens server-side trades XSS-exfiltration risk for CSRF risk: the proxy is authenticated by the ambient session cookie. lukk-nuxt closes this — the session cookie is `__Host-lukk-session` (`SameSite=Strict; Secure; HttpOnly; Path=/`, no `Domain`), **and** the proxy rejects any state-changing request whose `Origin` doesn't match your app (a `403`). You don't need to add your own CSRF layer for `/api/_lukk/**`.
 
+**What else the proxy holds the line on** (lukk-nuxt 0.12.0):
+
+- **Its route rules read the URL lukk will receive.** "Never proxy refresh", "don't refresh-and-retry a sign-in" and "clear the cookie on logout" are decided on the route the way Laravel's router reads it, with dot segments collapsed and a trailing slash trimmed. Earlier releases compared the raw path as a string, so `/api/_lukk/./refresh` or `/refresh/` reached lukk's refresh route as an ordinary proxied call. An encoded `#` or `?` in the path stays path data.
+- **Its responses say what they are.** JSON goes out as `application/json; charset=utf-8` (a bare JSON string or `null` keeps its JSON form), anything else — a WAF or proxy error page, say — as `text/plain; charset=utf-8` rather than `text/html` on your app's origin, and every response carries `X-Content-Type-Options: nosniff`.
+- **It bounds the request body**, which it buffers on routes reachable unauthenticated: over [`bodyLimit`](/configuration#bodylimit) (default 1 MiB) answers `413`, a chunked body `411`.
+- **Every seal expires.** Each sealed session carries a lifetime, [`session.maxAge`](/configuration#session-maxage) (default 30 days), so a session cookie copied out of a browser can't be unsealed indefinitely. Every refresh re-seals.
+- **A `401` is retried once the session is renewed.** The proxy renews server-side and answers the browser with no token, which lukk-core used to treat as "not refreshable"; the client now retries after a renewal ([`REFRESHED_WITHOUT_TOKEN`](/lukk-core#renewed-without-a-token)).
+
 **What it needs**
 
 - A runtime server (Node, an edge runtime, a serverless function) — so it does **not** work for a fully static (SSG) deploy.
@@ -89,7 +97,7 @@ The proxy above authenticates the lukk **`/auth`** routes. Your **own** API (and
    }
    ```
 
-   `$fetch('/api/...')` from the browser is now authenticated, the token never leaving the server. SSRF-safe (fixed target), CSRF-checked, strips the inbound cookie/authorization **and any browser-spoofable `X-Forwarded-*` headers** (stamping a trusted client IP so Laravel's per-IP throttling/logging can't be poisoned), strips upstream `Set-Cookie`, marks responses non-cacheable, streams the body, and never proxies `/api/_lukk/**`.
+   `$fetch('/api/...')` from the browser is now authenticated, the token never leaving the server. SSRF-safe (fixed target), CSRF-checked, strips the inbound cookie/authorization **and any browser-spoofable `X-Forwarded-*` headers** (stamping a trusted client IP so Laravel's per-IP throttling/logging can't be poisoned), strips upstream `Set-Cookie`, marks responses non-cacheable (`private, no-store`, `Vary: Cookie`), streams the body, and never proxies `/api/_lukk/**`. It also refuses (`404`) any request whose upstream URL falls under lukk's own routes, so `/api/auth/login` can't hand a token pair to the browser when `target` and `baseURL` are the same app — see [`api`](/configuration#api-bff-app-api-proxy).
 
    > [!NOTE]
    > **Transparent refresh.** If the sealed session's access token has already expired, the proxy refreshes it server-side *before* forwarding — sharing the same per-session single-flight as the `/api/_lukk/**` auth proxy, so a concurrent auth call and app-API call rotate the refresh token exactly once (never a reuse-detection family revoke). The rotated session is re-sealed into the cookie and carried through the streamed response. A genuinely revoked session still surfaces naturally: the refresh fails and Laravel sees the (stale) bearer, returning its own `401`. The request body is never buffered.

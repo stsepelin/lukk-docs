@@ -298,6 +298,8 @@ Everything is configured under the `lukk` key in `nuxt.config.ts`:
 | `session.cookieSecure` | `bool` | auto | BFF session cookie `Secure`/`__Host-` — see [Local Development](/local-development). |
 | `session.name` | `string` | — | BFF session-cookie namespace, so co-hosted apps don't collide. |
 | `session.sharedStore` | `string` | — | BFF: a Nitro storage mount every instance shares, for the record of replaced sessions. |
+| `session.maxAge` | `number` (seconds) | `2592000` (30 days) | BFF: the lifetime stamped into every seal. |
+| `bodyLimit` | `number` (bytes) | `1048576` (1 MiB) | BFF: the largest request body the auth proxy reads. |
 | `confirmationHeader` | `string` | `'X-Lukk-Confirmation'` | Header carrying the step-up token. |
 | `clientIpHeader` | `string` | `''` | BFF-only, opt-in — forward the real visitor IP upstream. |
 | `storage` | `string` | `'cookie'` | BFF token storage backend. |
@@ -398,6 +400,8 @@ BFF-only and opt-in. Forwards `${path}/**` to the **fixed** `target` (your Larav
 - **Step-up tokens are injected server-side.** A route behind lukk's `lukk.confirm` middleware works through this proxy once the user has [confirmed](/confirmation): the token comes from the sealed session, and one sent by the browser is discarded. Rename it with `confirmationHeader` and both proxies follow — the value must be a valid HTTP header name or the build fails.
 - **`target`** is validated at build time exactly like [`baseURL`](#baseurl) — it must be an absolute `http(s)` URL when the proxy is registered. (In `direct` mode `target` isn't proxied but still becomes the app-API base for [`useLukkFetch()`](/use-lukk-fetch), so it's validated there too, where a same-origin `/api` is legitimate.)
 - **`forceJson`** (default `true`) sets `Accept: application/json` on forwarded requests so a JSON API renders clean `401`/`422` JSON for unauthenticated/validation errors — instead of Laravel's default guest-redirect, which 500s behind a proxy. Set `false` to forward the browser's `Accept` instead — only if a route under `path` legitimately serves a non-JSON response.
+- **lukk's own routes are refused.** In the usual layout `api.target` is your Laravel app and `baseURL` is the same app under `/auth`, so `/api/auth/login` would have proxied a sign-in and streamed its `{ access_token, refresh_token }` to the browser — exactly what BFF mode exists to prevent. From lukk-nuxt 0.12.0 a request whose upstream URL falls under lukk's base path answers **`404`**, decided on the URL the way Laravel's router reads it (dot segments collapsed, trailing slash trimmed, `%2F` and other escapes decoded, case-insensitively) and regardless of host, since the same app is often named publicly in `api.target` and internally in `baseURL`. Call lukk through the composables (the `/api/_lukk` auth proxy) instead. If lukk is mounted at the **root** of `api.target`'s host there is no path that tells the two apart, so the proxy refuses everything — move lukk under a prefix or onto its own host. An unresolvable `baseURL` fails the app-API proxy closed with a `500` naming the setting.
+- **The request target is forwarded as sent.** The query comes from the raw request, and an encoded `?` or `#` in a path segment (`/files/a%3Fb`) stays encoded rather than becoming a real query or fragment upstream. Responses carry `Cache-Control: private, no-store` and `Vary: Cookie`, merged with the upstream's own `Vary`.
 - **`forwardSetCookie`** (default `[]`) is an allow-list of cookie **names** to pass through from the app API to the browser; everything else is stripped. No lukk session cookie is ever forwardable — not this app's, nor a co-hosted app's — whatever the list says. For a hybrid app whose Laravel API sets its own cookie (a locale, a theme) — see [Transport Modes](/transport-modes).
 
 **Request headers pass through.** Headers the proxy does not explicitly strip or overwrite reach your API unchanged — this is intentional and covered by tests, so you can depend on it. It's what lets an app carry per-visitor data across the proxy hop that the hop would otherwise destroy: a Nitro middleware can copy Cloudflare's `CF-IPCountry` / `CF-IPCity` onto your own `X-Visitor-*` headers (a prefix Cloudflare won't re-stamp) and read them on the Laravel side, since the proxy's own connection is re-stamped with the *server's* location. What the proxy replaces: `Cookie`, `Authorization`, the step-up confirmation header, `X-Forwarded-For`, the spoofable forwarding set (`X-Real-IP`, `CF-Connecting-IP`, `Forwarded`, …) and the path/scheme family (`X-Forwarded-Prefix`, `-Scheme`, `-SSL`, `-URI`, `X-Original-URL`, `X-Rewrite-URL`, blanked from lukk-nuxt 0.12.0 — Symfony/Laravel apply a trusted `X-Forwarded-Prefix` to every generated URL) — all credentials, client-identity or request-location claims a browser must not assert — and `Accept` while `api.forceJson` is on. A handful of hop-by-hop headers (`connection`, `transfer-encoding`, `accept-encoding`, `upgrade`, `expect`, `host`) are dropped by the proxy layer itself and don't transit either.
@@ -434,7 +438,7 @@ Three cookies carry the namespace — the sealed session, and the two that drive
 | Signed-out answer | unset | `__Host-lukk-signed-out` | `lukk-signed-out` |
 | Signed-out answer | `'admin'` | `__Host-lukk-admin-signed-out` | `lukk-admin-signed-out` |
 
-Unset keeps the default names, so adding it to one app doesn't change the other. The cookies are `bff`-only, but the name is read in **both** modes: it also scopes the cross-tab lock, the broadcast channel and direct mode's per-tab notes. The **logout note** is written by the browser the moment `logout()` is called and lives a minute; the **signed-out answer** is the server's reply to it and lives ten seconds. Both are `Path=/`, `SameSite=Strict`, and `Secure` exactly where the name carries `__Host-`. Neither is `HttpOnly` — the browser writes and reads the first, and reads the second. The signed-out answer is a bare marker; its presence is the whole message. The note carries one value: the moment `logout()` was called, which the page that finishes it cannot otherwise know. Their names reach the browser as `runtimeConfig.public.lukk.logoutCookie` and `runtimeConfig.public.lukk.signedOutCookie`, so if you override `cookieSecure` at runtime, override both of those too.
+Unset keeps the default names, so adding it to one app doesn't change the other. The cookies are `bff`-only, but the name is read in **both** modes: it also scopes the cross-tab lock, the broadcast channel and direct mode's per-tab notes. The **logout note** is written by the browser the moment `logout()` is called and lives a minute; the **signed-out answer** is the server's reply to it and lives ten seconds. Both are `Path=/`, `SameSite=Strict`, and `Secure` exactly where the name carries `__Host-`. Neither is `HttpOnly` — the browser writes and reads the first, and reads the second. The signed-out answer is a bare marker; its presence is the whole message. The note carries one value: the moment `logout()` was called, which the page that finishes it cannot otherwise know. Their names reach the browser as `runtimeConfig.public.lukk.logoutCookie` and `runtimeConfig.public.lukk.signedOutCookie`. From lukk-nuxt 0.12.0 the server restates both in each request's public config before anything renders, so a runtime `cookieSecure` override needs nothing else; earlier releases baked them in at build, and the browser then wrote a note the server never read unless you overrode both by hand.
 
 > [!WARNING]
 > **Co-hosted apps need a distinct `session.name`.** Everything that keeps two apps on one origin apart is named from it: the cookies, and — together with [`app.baseURL`](https://nuxt.com/docs/api/nuxt-config#baseurl) — the cross-tab Web Lock, the `BroadcastChannel` and the direct-mode web-storage keys. Leave both the same and one app's pending-logout note is read by the other, which then ends a session it doesn't own, while their tabs queue behind each other's lock for no reason.
@@ -468,6 +472,22 @@ nitro: {
   },
 },
 ```
+
+### `session.maxAge`
+
+```ts
+lukk: { session: { maxAge: 2592000 } } // seconds; default 30 days
+```
+
+**lukk-nuxt 0.12.0.** The lifetime, in seconds, of each sealed session the BFF writes. iron stamps it into the seal and checks it on every unseal, so a session cookie copied out of a browser stops unsealing that long after it was written; an expired seal reads as no session. Every refresh re-seals, so an active session is still bounded by lukk's refresh family. The default matches lukk's default [`refresh_ttl`](#token-lifetimes) — keep `maxAge` at least that long, or idle sessions end before their refresh token does. Seals written by earlier versions carry no expiry until they are next re-sealed.
+
+### `bodyLimit`
+
+```ts
+lukk: { bodyLimit: 1048576 } // bytes; default 1 MiB
+```
+
+**lukk-nuxt 0.12.0.** The largest request body the BFF auth proxy (`/api/_lukk/**`) reads. Its routes are reachable unauthenticated and the body is buffered before anything else, so this bounds what one request can make the server hold. A declared `Content-Length` over the limit answers **`413`** before anything is read; a chunked body, which declares no length, answers **`411`**; and the bytes are measured again once read. A passkey attestation is a few KiB, so the default is generous for anything lukk accepts. The app-API proxy streams and is unaffected.
 
 ### `clientIpHeader`
 

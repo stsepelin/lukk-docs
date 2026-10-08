@@ -44,12 +44,30 @@ The client attaches the bearer token, and on a `401` it calls `refresh` once and
 | `fetch?` | `typeof fetch` | Custom fetch (defaults to the global). |
 | `getAccessToken?` | `() => string \| null \| Promise<…>` | The bearer token to attach. |
 | `getConfirmationToken?` | `() => string \| null \| Promise<…>` | The step-up token for `X-Lukk-Confirmation`. |
-| `refresh?` | `() => Promise<TokenPair \| null>` | Obtain a fresh pair on a 401; `null` if not refreshable. |
+| `refresh?` | `() => Promise<RefreshOutcome>` | Renew on a 401: a `TokenPair`, [`REFRESHED_WITHOUT_TOKEN`](#renewed-without-a-token), or `null` if not refreshable. |
 | `onTokens?` | `(pair) => void` | Persist a freshly-minted pair (login / refresh / passkey login / restore). |
 | `onUnauthenticated?` | `() => void` | Refresh failed — the session is gone. |
 | `confirmationHeader?` | `string` | Header name (default `X-Lukk-Confirmation`). |
 
 Where the tokens actually live — memory, a sealed cookie, a server session — is entirely the caller's choice. The core only knows how to *speak* to lukk.
+
+### Renewed without a token
+
+A `refresh` hook's answer is shape-checked: only a real token pair is retried with and handed to `onTokens`, so an arbitrary response body can never be stored as a token. A binding whose session is renewed somewhere the client holds no token — a BFF proxy re-sealing a server-side session — has no pair to return. It returns the exported symbol `REFRESHED_WITHOUT_TOKEN` instead: the request is retried once and `onTokens` isn't called. A symbol can't come out of a response body, so the shape gate on real pairs is unchanged.
+
+```ts
+import { createLukkClient, REFRESHED_WITHOUT_TOKEN, type RefreshOutcome } from 'lukk-core'
+
+const lukk = createLukkClient({
+  baseURL: '/api/_lukk',
+  refresh: async (): Promise<RefreshOutcome> => {
+    const res = await fetch('/api/_lukk/refresh', { method: 'POST' })
+    return res.ok ? REFRESHED_WITHOUT_TOKEN : null
+  },
+})
+```
+
+`RefreshOutcome` is `TokenPair | typeof REFRESHED_WITHOUT_TOKEN | null`. lukk-nuxt's BFF mode uses it, which is how a `401` is now retried there once the proxy has renewed the session (lukk-core 0.12.0); its `$lukkRefresh` and `$lukkRestore` resolve to the symbol in BFF mode (both still truthy on success) and are typed `() => Promise<RefreshOutcome>`.
 
 ## Methods
 
@@ -65,6 +83,7 @@ lukk.revokeOtherSessions()
 
 // step-up confirmation
 lukk.confirmPassword(password)          // → { confirmation_token }
+lukk.passkeyConfirmationOptions()       // → { ceremony_id, options } — lukk ≥ 0.7.0, 404 on older
 lukk.confirmPasskey(ceremonyId, credential)
 
 // two-factor management
@@ -84,6 +103,8 @@ lukk.deletePasskey(credentialId)
 ```
 
 Every shape is exported as a type (`TokenPair`, `TwoFactorChallenge`, `PasskeyLoginOptions`, …) and [conformance-tested](/architecture#conformance) against real lukk.
+
+`Amr` types the access token's [`amr` claim](/tokens-and-rotation#the-amr-claim): `'pwd' | 'otp' | 'pop' | 'user' | 'mfa'`, the RFC 8176 values lukk 0.7.0 emits. `'webauthn'` is gone (a breaking type change in lukk-core 0.12.0): a passkey session is `pop` + `user`, and `mfa` marks a multi-factor one.
 
 ## Errors
 

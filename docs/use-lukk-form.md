@@ -38,6 +38,8 @@ useLukkForm({ … }, {
 
 With `rememberKey`, a half-filled form survives a route change and back — mount another form with the same key and its `data` is restored. (The reset/`isDirty` baseline isn't remembered; `isDirty` compares the restored data against the original `initial`.) Use it for **plain** drafts: the state is serialized into the SSR payload, so don't remember `File`/`Blob` fields or sensitive values.
 
+The draft is stored under the Nuxt state key `lukk:form:<rememberKey>`, so it can't collide with the rest of your app's state (lukk-nuxt 0.12.0). Earlier releases used `rememberKey` itself as the key, which meant `rememberKey: 'lukk:user'` overwrote the signed-in user. A draft remembered under the old key isn't carried over.
+
 The value type flows through, so `form.data.email` is typed, and the returned form is a `LukkForm<T>`.
 
 ## Basic Usage
