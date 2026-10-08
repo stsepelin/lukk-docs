@@ -14,6 +14,25 @@ The access token is an HS256 JWT, valid for 15 minutes. It carries these claims,
 | `fid` | Refresh **family** id — ties the access token to its refresh-token lineage, so a family revoke can kill it. |
 | `jti` | Unique token id — the denylist key for this individual token. |
 | `iat` / `nbf` / `exp` | Issued-at / not-before / expiry. |
+| `amr` | How the session was authenticated ([RFC 8176](https://www.rfc-editor.org/rfc/rfc8176)) — see below. |
+
+Two more claims appear only when [abilities](/abilities) are in use: `scope` and `pin`.
+
+### The `amr` claim
+
+`amr` lists the authentication methods behind the session, using only values registered under RFC 8176 (lukk 0.7.0):
+
+| Sign-in | `amr` |
+|---|---|
+| Password | `["pwd"]` |
+| Password + TOTP or recovery code | `["pwd","otp","mfa"]` |
+| Passkey, multi-factor assertion | `["pop","user","mfa"]` |
+| Passkey, single-factor assertion | `["pop","user"]` |
+| Passkey (single-factor) + TOTP | `["pop","user","otp"]` |
+
+`mfa` marks two *different* factor categories, so gate "was this multi-factor" on `mfa`, and "was a passkey used" on `pop`. A single-factor passkey plus a TOTP is two possession factors and carries no `mfa` (NIST SP 800-63B-4 §2.2.1). See [Passkeys](/passkeys#when-a-passkey-counts-as-multi-factor) for what makes an assertion multi-factor. Releases up to 0.6 emitted `["webauthn"]` for a passkey, a value outside the registry, and `["pwd","otp"]` for a password with a code.
+
+`amr` is **stored with the session** (the `refresh_tokens.amr` column) and carried forward by every rotation. Up to 0.6 only the sign-in stamped it, so it vanished from the first refreshed access token, and a route gated on it stopped working about one `access_ttl` into each session. It is also **reserved**, like `scope` and `pin`: applied after the [`tokenClaimsUsing`](/customization#custom-token-claims) merge, so a claims hook can neither forge a method the session never used nor erase the real one.
 
 It's **stateless**: the guard verifies it by checking a signature and these claims, with no database lookup for the token itself.
 
@@ -131,6 +150,7 @@ Schema::create('refresh_tokens', function (Blueprint $table) {
     $table->char('token_hash', 64)->unique();    // sha256(opaque token)
     $table->ulid('previous_id')->nullable();     // audit chain
     $table->text('scope')->nullable();           // pinned grant, or null to derive per mint
+    $table->text('amr')->nullable();             // how the session was authenticated (JSON list)
     $table->timestamp('rotated_at')->nullable(); // set when consumed
     $table->timestamp('revoked_at')->nullable()->index(); // hard kill (logout / reuse cascade)
     $table->timestamp('expires_at')->index();    // absolute family ceiling
@@ -138,10 +158,11 @@ Schema::create('refresh_tokens', function (Blueprint $table) {
 });
 ```
 
-Three columns are worth a word:
+Four columns are worth a word:
 
 - **`guard`** (lukk 0.4.0) is null on the default guard and carries the guard's name on any other, so [multiple guards](/multiple-guards) can't see, rotate, or revoke each other's families even where `users.id === admins.id`. A single-guard install never reads it.
 - **`scope`** (lukk 0.6.0) is the family's pinned [ability](/abilities) grant. `null` and `''` mean different things — *derive on every mint* and *pinned to nothing* — so a replacement [`RefreshTokenRepository`](/customization#swapping-storage) has to round-trip the empty string.
+- **`amr`** (lukk 0.7.0) is the family's [authentication methods](#the-amr-claim), JSON-encoded, re-stamped onto every access token the family mints. It went into the existing core migration, so a fresh install gets it and an install that already ran that migration adds the column itself (see [Upgrading](/upgrading)). Until then nothing breaks: the claim simply disappears after the first refresh, as it did before 0.7.
 - **`revoked_at` is indexed** because `lukk:prune` sweeps on it. `previous_id` is load-bearing beyond the audit chain: a row with none is the family's original, which is how [`claim_seconds`](/configuration#refresh-behavior) recognises a session's never-rotated original token.
 
 Change the `user_id` column type if your users have non-integer keys. The migration is [publish-only](/installation), so none of this is applied for you.

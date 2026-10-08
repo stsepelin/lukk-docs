@@ -57,7 +57,7 @@ Lukk::tokenClaimsUsing(fn ($userId) => [
 ```
 
 > [!NOTE]
-> Your claims are merged in, but the standard claims (`sub`, `exp`, `iss`, `aud`, `jti`, `fid`, …) always win and cannot be overridden.
+> Your claims are merged in, but the standard claims (`sub`, `exp`, `iss`, `aud`, `jti`, `fid`, …) always win and cannot be overridden. So do the reserved claims `scope`, `pin` and (from lukk 0.7.0) `amr`: a hook can neither forge an [authentication method](/tokens-and-rotation#the-amr-claim) the session never used nor erase the real one.
 
 ## Swapping the refresh token model
 
@@ -84,11 +84,21 @@ use App\Auth\RedisRefreshTokenRepository;
 $this->app->bind(RefreshTokenRepository::class, RedisRefreshTokenRepository::class);
 ```
 
-Three fields on `RefreshTokenRecord` carry policy that the repository is the only thing able to supply, and all of them fail quietly if you leave them out:
+Four fields on `RefreshTokenRecord` carry policy that the repository is the only thing able to supply, and all of them fail quietly if you leave them out:
 
 - **`original`** — whether this row is the family's first, the one you were handed with a `null` `$previousId`. It is how [`claim_seconds`](/configuration#refresh-behavior) recognises the refresh token the sign-in itself issued, and it is the field to return. It is a tri-state: leave it `null` ("I can't say") and lukk falls back to `createdAt`. Never answer `true` for a row you are unsure about — a successor reported as the original is a session in active use being logged out.
 - **`createdAt`** — the row's creation time, and the fallback for `claim_seconds` when `original` is unknown. It only compares mint times, so a successor minted within a couple of seconds of the sign-in reads as the original; that tolerance is a fixed constant, deliberately not `leeway` (both timestamps come from the same server in one sign-in, so only write skew has to be absorbed). Leave **both** fields out and the revocation is disabled entirely (lukk logs one warning per worker process and carries on).
 - **`scope`** — the family's pinned [ability](/abilities) grant. `null` and `''` are different answers: `null` means *derive the grant on every mint*, `''` means *pinned to nothing*. Round-trip the empty string. Collapsing the two lets the most restricted token in the system widen to its subject's full grant on the first refresh.
+- **`amr`** (lukk 0.7.0) — the session's [authentication methods](/tokens-and-rotation#the-amr-claim). `persist()` takes a trailing `?string $amr = null`; store the string you are given and return it here, as you do `scope`. A repository that ignores it keeps the pre-0.7 behaviour: the claim is absent after the first refresh.
+
+```php
+public function persist(
+    int|string $userId, string $familyId, ?string $previousId, string $tokenHash,
+    int $expiresAt, ?string $scope = null, ?string $amr = null,
+): void
+```
+
+PHP raises a fatal on a mismatched signature, so an implementation (or a `DatabaseRefreshTokenRepository` subclass overriding `persist()`) written for 0.6 fails at once rather than silently.
 
 ## Reshaping responses
 
@@ -133,8 +143,22 @@ The cryptographic and revocation seams are contracts too. Rebind `Contracts\Toke
 | `LoginResponse` / `RefreshResponse` / `LogoutResponse` | built-in | Shape the HTTP responses. |
 | `TwoFactorChallengeResponse` | built-in | Shapes the 2FA login challenge. |
 | `TwoFactorProvider` | `Google2FaTotpProvider` | Generates and verifies TOTP codes. |
-| `WebAuthnCeremony` | `SpomkyWebAuthnCeremony` | Performs WebAuthn registration/assertion. |
+| `WebAuthnCeremony` | `SpomkyWebAuthnCeremony` | Performs WebAuthn registration/assertion, and reports what an assertion proved. |
 | `PasskeyRepository` | `DatabasePasskeyRepository` | Persists passkey credentials. |
+
+::: warning Implementing `WebAuthnCeremony` yourself (lukk 0.7.0)
+`verifyAssertion()` returns a `Lukk\Support\PasskeyAssertion` (`signCount`, `userVerified`, `multiFactor`) instead of an `int`; it and `authenticationOptions()` take an optional `?string $userVerification` (`required`/`preferred`/`discouraged`, or `null` for your configured value), and there is a new `isMultiFactor(PasskeyRecord): bool`.
+
+```php
+public function authenticationOptions(string $challenge, array $allowCredentialIds, ?string $userVerification = null): array;
+
+public function verifyAssertion(array $response, string $challenge, PasskeyRecord $stored, ?string $userVerification = null): PasskeyAssertion;
+
+public function isMultiFactor(PasskeyRecord $stored): bool;
+```
+
+**Enforce** `$userVerification` on the assertion, not only in the options — a step-up passes `required` when the account can reach AAL2. Report `multiFactor` true only when the assertion carries the UV flag **and** the credential was already `uvInitialized` before this ceremony; read that before verifying, because a WebAuthn library typically updates it as part of verification. lukk skips an enrolled TOTP on this answer. `isMultiFactor()` reports whether a stored credential has shown user verification, `false` when unknown. A mismatched method is a fatal when your class loads, so it surfaces on the first passkey request rather than at boot.
+:::
 
 ::: warning Replacing `PasskeyRepository` or `RefreshTokenRepository` under multiple guards
 Both are **guard-scoped**: an account is `(guard, id)`, not `id`, because [providers are separate tables](/multiple-guards) where `users.id === admins.id` is the ordinary case. Every method must honour that — including `findByCredentialId`, which takes a credential id and *no* user and is therefore the authentication decision itself.

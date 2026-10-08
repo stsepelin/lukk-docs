@@ -68,18 +68,26 @@ Content-Type: application/json
 
 #### With a passkey
 
-If [passkeys](/passkeys) are enabled, a passkey assertion earns the same token, so passkey-only users can step up too:
+If [passkeys](/passkeys) are enabled, a passkey assertion earns the same token, so passkey-only users can step up too. Get the ceremony from the authenticated options route, then post the assertion:
+
+```http
+POST /auth/confirm-passkey/options
+Authorization: Bearer <access token>
+```
 
 ```http
 POST /auth/confirm-passkey
 Authorization: Bearer <access token>
+Content-Type: application/json
+
+{ "ceremony_id": "…", "credential": { … } }
 ```
 
-Both endpoints return the same kind of `confirmation_token` — the credential used is interchangeable.
+Both endpoints return the same kind of `confirmation_token`. The credential is interchangeable only up to the account's level, though: from lukk 0.7.0 a passkey step-up must meet the **highest level the account can reach** (NIST SP 800-63B-4 §4.1.2.1), because this token is what binds and removes authenticators. A passkey that didn't verify the user is refused on an account that has a password or a user-verifying passkey, with a **`422` on `credential`** (not `403`, which would tell the client the token may never confirm). The route takes no TOTP code. See [Passkeys → Step-up with a passkey](/passkeys#step-up-with-a-passkey).
 
 #### Throttling
 
-Both endpoints are rate-limited (`rate_limits.confirm`, default **5 / 60s**), keyed on **both** the user and the IP — the per-user bucket is the load-bearing one, since a caller holding a stolen access token is a single identity behind however many addresses they like. A tripped limit returns `429`.
+Both endpoints are rate-limited (`rate_limits.confirm`, default **5 / 60s**; the passkey options route rides `rate_limits.passkeys`), keyed on **both** the user and the IP — the per-user bucket is the load-bearing one, since a caller holding a stolen access token is a single identity behind however many addresses they like. A tripped limit returns `429`.
 
 Password confirmation re-verifies the *same* secret as login, so it also counts toward the opt-in [account lockout](/account-lockout) under the `confirm` purpose; a locked step-up answers `423`, and a successful login or a password reset clears it. `confirm-passkey` is throttled but never locked — an assertion is a signature, not a guessable secret, so there's nothing to cap.
 
@@ -91,6 +99,8 @@ Apply the `lukk.confirm` middleware to any route that should require a fresh con
 Route::delete('/account', [AccountController::class, 'destroy'])
     ->middleware(['auth:api', 'lukk.confirm']);
 ```
+
+The order doesn't matter: `lukk.confirm` is sorted after authentication, so `['lukk.confirm', 'auth:api']` works too. Up to lukk 0.6 that order read no user and answered `423` to a valid confirmation.
 
 The client then attaches the confirmation token to the request:
 

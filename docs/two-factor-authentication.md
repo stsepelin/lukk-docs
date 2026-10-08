@@ -95,7 +95,7 @@ Content-Type: application/json
 { "challenge_token": "...", "code": "123456" }
 ```
 
-This returns the normal [token pair](/authentication#logging-in), carrying the claim `amr: ["pwd","otp"]` to record that two factors were used. The challenge is single-use and short-lived; a wrong code leaves it usable so the user can retry, and the endpoint is throttled per account. It is also bound to the password that was checked: if that password is changed or reset before the challenge is redeemed, redemption answers `422` on `challenge_token` and the user signs in again (lukk 0.7.0). A challenge minted by an earlier release — in the minutes around an upgrade — carries no such binding and is refused the same way.
+This returns the normal [token pair](/authentication#logging-in), carrying the claim `amr: ["pwd","otp","mfa"]` to record that two factors were used (lukk 0.7.0; earlier releases stamped `["pwd","otp"]`). The same challenge follows a [passkey login](/passkeys#when-a-passkey-counts-as-multi-factor) whose assertion was single-factor; redeeming that one gives `["pop","user","otp"]`, without `mfa`, because a passkey without user verification and a TOTP are both possession factors. The challenge is single-use and short-lived; a wrong code leaves it usable so the user can retry, and the endpoint is throttled per account. It is also bound to the password that was checked: if that password is changed or reset before the challenge is redeemed, redemption answers `422` on `challenge_token` and the user signs in again (lukk 0.7.0). A challenge minted by an earlier release — in the minutes around an upgrade — carries no such binding and is refused the same way.
 
 ```mermaid
 sequenceDiagram
@@ -111,7 +111,7 @@ sequenceDiagram
         U->>App: TOTP code (or recovery code)
         App->>API: POST /auth/two-factor-challenge { challenge_token, code }
         alt code correct
-            API-->>App: 200 { access_token, refresh_token } · amr ["pwd","otp"]
+            API-->>App: 200 { access_token, refresh_token } · amr ["pwd","otp","mfa"]
             Note over App: AUTHENTICATED
         else wrong code
             API-->>App: 422 — challenge still valid, retry (throttled per account)
@@ -125,11 +125,18 @@ sequenceDiagram
 
 Recovery codes let a user authenticate if they lose their device. Each code works **once**. Submit one as `recovery_code` (instead of `code`) to `/auth/two-factor-challenge`. Users can regenerate the full set at any time via `/auth/two-factor/recovery-codes`, which invalidates the old codes.
 
+A recovery code is matched before the user's row is locked, and only spending it takes the lock, so a wrong guess no longer stalls every other write to the account while each stored code is hashed (lukk 0.7.0). Concurrent redemptions still spend a code once.
+
+### Events
+
+Confirming a TOTP dispatches `TwoFactorAuthenticationConfirmed`, removing one (confirmed or pending) dispatches `TwoFactorAuthenticationDisabled`, and regenerating the codes dispatches `RecoveryCodesGenerated` (lukk 0.7.0). lukk sends no mail; listen and tell the user through another channel. See [Events → Authenticator events](/events#authenticator-events).
+
 ### Security notes
 
 - The TOTP secret is stored **encrypted** (it must be reversible to verify codes), while recovery codes are **salted and hashed** and shown only once.
 - A TOTP code cannot be replayed within its 30-second window — accepted codes are cached and rejected on reuse.
 - The verification window is ±1 step and should not be widened (see [Configuration](/configuration#two-factor)).
+- A stored secret the TOTP library can't read (not base32, too short — a restored backup or a hand-edited row) fails the code and is reported, rather than answering `500` on every sign-in.
 - **Re-enrolling over confirmed 2FA is refused** with `409`. Overwriting the secret would null `two_factor_confirmed_at` and silently switch 2FA *off*, so a user who reopened the QR screen and abandoned it would be left unprotected with nothing to notify them. Call `DELETE /auth/two-factor` first — disabling should be deliberate.
 - Challenge codes are throttled per account. With the opt-in [account lockout](/account-lockout) enabled, a run of failed codes also locks the second factor (`423`) — but a **recovery code is never gated by that lock**, so an attacker can't strand a user by burning their TOTP budget.
 

@@ -44,8 +44,9 @@ These routes are registered only when `features.passkeys` is enabled.
 | `POST` | `/auth/passkeys/registration-options` | `auth` + confirm | Get a registration challenge. |
 | `POST` | `/auth/passkeys` | `auth` + confirm | Verify the attestation and store the credential. |
 | `POST` | `/auth/passkeys/login-options` | `throttle` | Get an assertion challenge → `{ ceremony_id, options }`. |
-| `POST` | `/auth/passkeys/login` | `throttle` | Verify the assertion → token pair (`amr: ["webauthn"]`). |
-| `POST` | `/auth/confirm-passkey` | `auth` | Satisfy [step-up confirmation](/confirmation) with a passkey. |
+| `POST` | `/auth/passkeys/login` | `throttle` | Verify the assertion → token pair (`amr: ["pop","user"]`, plus `"mfa"` for a [multi-factor assertion](#when-a-passkey-counts-as-multi-factor)), or a two-factor challenge. |
+| `POST` | `/auth/confirm-passkey/options` | `auth`, `throttle:lukk-passkeys` | Get a step-up challenge for the signed-in user → `{ ceremony_id, options }` (lukk 0.7.0). |
+| `POST` | `/auth/confirm-passkey` | `auth`, `throttle:lukk-confirm` | Satisfy [step-up confirmation](/confirmation) with a passkey. |
 | `GET` | `/auth/passkeys` | `auth` | List the user's credentials. |
 | `DELETE` | `/auth/passkeys/{id}` | `auth` + confirm | Revoke a credential. |
 
@@ -76,7 +77,9 @@ sequenceDiagram
 Login is fully passwordless:
 
 1. The client requests options from `/auth/passkeys/login-options`. The response includes an opaque `ceremony_id` and the WebAuthn `options`; pass the options to `navigator.credentials.get()`.
-2. The browser returns an assertion, which the client posts to `/auth/passkeys/login` along with the `ceremony_id`. lukk verifies the signature and returns the normal [token pair](/authentication#logging-in), carrying `amr: ["webauthn"]`.
+2. The browser returns an assertion, which the client posts to `/auth/passkeys/login` along with the `ceremony_id`. lukk verifies the signature and returns the normal [token pair](/authentication#logging-in), carrying `amr: ["pop","user"]` — or `["pop","user","mfa"]` when the assertion was [multi-factor](#when-a-passkey-counts-as-multi-factor).
+
+The `ceremony_id` is the UUID lukk issued. Anything else is refused with `422` before it reaches the cache (lukk 0.7.0).
 
 ```mermaid
 sequenceDiagram
@@ -90,14 +93,58 @@ sequenceDiagram
     B-->>App: assertion (signed by the private key)
     App->>API: POST /auth/passkeys/login { ceremony_id, credential }
     Note over API: pull+verify challenge (single-use), origin/rp_id,<br/>signature vs stored public key, sign-count · resolve user
-    API-->>App: 200 { access_token, refresh_token } · amr ["webauthn"]
+    API-->>App: 200 { access_token, refresh_token } · amr ["pop","user","mfa"]
 ```
 
 The challenge is server-generated, single-use, and held server-side (in the cache) — it never travels inside a JWT.
 
+### When a passkey counts as multi-factor
+
+**lukk 0.7.0.** A passkey is always possession of a key. It is *also* a second factor only when the authenticator verified the user (a PIN or a biometric), and lukk decides that per **assertion**, not from config:
+
+- the assertion carries the user-verification (UV) flag, **and**
+- the credential was already `uvInitialized` before this ceremony — it had shown user verification before.
+
+The second condition is WebAuthn L3 §4's own rule: the UV flag must not be relied on for a credential that has never presented it. It closes the case of a stolen security key with no PIN, whose thief sets a PIN and presents UV from then on. lukk never promotes `uvInitialized` itself.
+
+What that decides:
+
+| Assertion | `amr` | An enrolled TOTP |
+|---|---|---|
+| Multi-factor | `["pop","user","mfa"]` | Skipped — the passkey already is two factors. |
+| Single-factor (presence only, or UV not yet trusted) | `["pop","user"]` | **Challenged.** Login answers `{ "two_factor": true, "challenge_token": "…" }`, exactly like the [password path](/two-factor-authentication#logging-in-with-2fa). Redeeming it gives `["pop","user","otp"]`, without `mfa`. |
+
+The last row is deliberately not `mfa`. A TOTP is possession too (NIST SP 800-63B-4 §3.1.4, §3.1.6), and two possession factors don't make multi-factor: §2.2.1 requires a password or a biometric comparison alongside a physical authenticator. Up to lukk 0.6 a passkey login skipped an enrolled TOTP unconditionally, and stamped `amr: ["webauthn"]`, a value outside the RFC 8176 registry.
+
+`passkeys.user_verification` is still what lukk *asks* the authenticator for at login. It no longer decides whether the second factor is skipped: config is what was asked for, the assertion is what happened.
+
+> [!NOTE]
+> lukk-js's `useLukkPasskeys().login()` expects a token pair. It does not yet surface the two-factor challenge that a single-factor passkey on a TOTP-enrolled account now gets. With the default `user_verification: required`, a passkey registered with user verification gives a multi-factor assertion and never reaches that branch.
+
 ### Managing passkeys
 
 `GET /auth/passkeys` lists the current user's credentials, and `DELETE /auth/passkeys/{id}` revokes one (behind step-up confirmation).
+
+Registering one dispatches [`PasskeyRegistered`](/events#authenticator-events), and removing one dispatches `PasskeyDeleted`. Listen to tell the user through another channel (lukk 0.7.0).
+
+### Step-up with a passkey
+
+`POST /auth/confirm-passkey` earns a [confirmation token](/confirmation), and that token is what binds and removes authenticators. So from lukk 0.7.0 it must meet the **account's own highest available level** (NIST SP 800-63B-4 §4.1.2.1):
+
+- A **multi-factor** assertion always meets it.
+- A **single-factor** assertion is refused when the account can reach AAL2: it has a password, or any passkey that has shown user verification. It is accepted only on a password-less account whose credentials are all single-factor, which has nothing stronger and would otherwise be stranded.
+
+Negotiate the ceremony with `POST /auth/confirm-passkey/options` (authenticated) rather than the anonymous `passkeys/login-options`. It lists the user's own credentials, so a non-discoverable key works, and asks for `userVerification: required` exactly when the account can reach AAL2. The same requirement is **enforced** on the assertion, so options fetched from the login route gain nothing.
+
+```http
+POST /auth/confirm-passkey
+Authorization: Bearer <access token>
+Content-Type: application/json
+
+{ "ceremony_id": "…", "credential": { … } }
+```
+
+A refused step-up answers **`422` on `credential`**, like a failed verification — not `403`. On a step-up route `403` means the token itself may never confirm, and clients abandon the prompt on it; here only the credential fell short, and the password or another passkey still works. The route takes no TOTP code: a TOTP is possession, like the passkey, so it can't lift the step-up to AAL2.
 
 ### Split-domain (BFF) deployments
 
@@ -111,7 +158,9 @@ When your front-end and API live on different subdomains (`app.example.com` and 
 - Credential IDs are globally unique, and the COSE public key is **encrypted at rest**.
 - A regressing signature counter is rejected and dispatches `Events\PasskeyCloneDetected`, but a `0` counter is never flagged — synced passkeys (iCloud, Google, 1Password) always report `0`.
 - `rp_id` and `origins` are **required** when passkeys are enabled — lukk throws on an empty value rather than fall back to a weak default.
-- By default lukk **requires user verification** (`user_verification` → `required`) — the authenticator must verify the user (biometric/PIN), not just their presence. Passwordless login and `confirm-passkey` step-up are single-factor (possession), so enforcing UV makes them phishing-resistant, AAL2-style. Lower it to `preferred` only if you must support authenticators that can't verify the user (see [Configuration](/configuration#passkeys)).
+- By default lukk **asks for user verification** at login (`user_verification` → `required`) — the authenticator must verify the user (biometric/PIN), not just their presence. Lower it to `preferred` only if you must support authenticators that can't verify the user (see [Configuration](/configuration#passkeys)). Whether a given login *was* multi-factor is read from the assertion, [not from this setting](#when-a-passkey-counts-as-multi-factor), and a step-up sets its own requirement.
+- Registration is verified against the COSE algorithms lukk advertised in the options (WebAuthn L3 §7.1), not a library default.
+- An undecryptable stored credential (a rotated `APP_KEY` without `app.previous_keys`, a corrupt row) reads as one that doesn't match, rather than a `500`.
 - Passkey storage sits behind `Contracts\PasskeyRepository` (`passkeys` table) and is swappable — see the [note on replacing it](/customization) under multiple guards.
 - Credentials are **scoped to a guard** (a `guard` column, as of `0.6.0`). Under [multiple guards](/multiple-guards) the assertion lookup takes a credential id and no user, so without scoping an admin's authenticator could resolve on the users guard. Single-guard installs are unaffected and the column stays null.
 
@@ -205,6 +254,8 @@ A user can also satisfy [step-up confirmation](/confirmation) with a passkey ins
 const { confirm } = useLukkPasskeys()
 await confirm() // runs an assertion → stores a confirmation token
 ```
+
+`confirm()` asks lukk's step-up options (`passkeyConfirmationOptions()`, `POST /auth/confirm-passkey/options`), so the authenticator is asked for user verification whenever lukk will require it. Against a lukk older than 0.7.0 that route answers `404`, and only then does it fall back to the login options. A `403` from the options route abandons the pending confirmation, as a `403` from `confirm-passkey` already did. A passkey that falls short of the account's level rejects with a `422` on `credential`; offer the password instead.
 
 After `confirm()`, the next sensitive action (managing 2FA, registering another passkey) is authorized, exactly as if they'd re-entered their password. See [Confirmation](/confirmation).
 

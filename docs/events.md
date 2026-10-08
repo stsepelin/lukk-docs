@@ -109,6 +109,40 @@ Event::listen(function (PasswordChanged $event) {
 
 Deliberately distinct from Laravel's `Illuminate\Auth\Events\PasswordReset` in the table below, which fires for the forgot-password flow. Both are worth reacting to, but they mean different things: one proves control of the email address, the other proves knowledge of the existing password. Users read *"your password was reset"* and *"your password was changed"* very differently — and an unexpected one of either is how account takeover gets noticed, which is why this sits with the security events rather than as a bare row.
 
+### Authenticator events
+
+**lukk 0.7.0.** NIST SP 800-63B-4 §4.1.2.1 requires telling the subscriber, through another channel, when an authenticator is bound to their account. lukk sends no mail, so it dispatches an event every time one is bound or removed, and you send the notice. Without them, an attacker holding a stolen session and a step-up could enrol their own key, or remove the victim's second factor, with nothing for your app to hang a warning on.
+
+| Event | Fires when | Properties |
+|---|---|---|
+| `TwoFactorAuthenticationConfirmed` | A TOTP is confirmed. Enrolment alone binds nothing, so it doesn't fire. | `$user` |
+| `TwoFactorAuthenticationDisabled` | A TOTP secret, confirmed or pending, is removed. Not for an account that had none. | `$user` |
+| `RecoveryCodesGenerated` | A new set of recovery codes replaces the old. | `$user` |
+| `PasskeyRegistered` | A passkey is stored. | `$user`, `$credentialId`, `$name` (nullable) |
+| `PasskeyDeleted` | A credential was actually removed. | `$user`, `$credentialId` |
+
+All five are in `Lukk\Events`, and `$user` is the resolved `Authenticatable`. Names follow Fortify's where one exists. Send the notice somewhere the attacker doesn't control — the account's email, not an in-app banner they can dismiss:
+
+```php
+use Illuminate\Support\Facades\Event;
+use Lukk\Events\PasskeyDeleted;
+use Lukk\Events\PasskeyRegistered;
+use Lukk\Events\RecoveryCodesGenerated;
+use Lukk\Events\TwoFactorAuthenticationConfirmed;
+use Lukk\Events\TwoFactorAuthenticationDisabled;
+
+Event::listen([
+    TwoFactorAuthenticationConfirmed::class,
+    TwoFactorAuthenticationDisabled::class,
+    RecoveryCodesGenerated::class,
+    PasskeyRegistered::class,
+    PasskeyDeleted::class,
+], function (object $event) {
+    // A queued notification: "a sign-in method on your account changed — if this wasn't you, …"
+    $event->user->notify(new SignInMethodChanged($event::class));
+});
+```
+
 ## Framework events
 
 lukk also dispatches standard Laravel auth events, so your existing listeners work unchanged:
