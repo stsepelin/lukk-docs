@@ -98,7 +98,7 @@ It doesn't stop at shapes — it completes the real ceremonies: a genuine TOTP c
 
 ## Quality gate
 
-Both packages enforce **100% test coverage** (statements, branches, functions, lines) — the same bar on both sides. Lint and type-checking run in CI alongside the coverage gate and the conformance suite. The Nuxt runtime is unit-tested through a lightweight `#imports` mock, so the tests run without booting Nuxt; the PHP suite runs on Testbench against an in-memory sqlite database.
+Both packages enforce **100% test coverage** (statements, branches, functions, lines) — the same bar on both sides. Mutation testing gates both halves too — Stryker on `lukk-core` and `lukk-nuxt` at a break threshold of 100%, Pest's own mutation testing on the PHP package at a floor of 99 — because 100% coverage says every line ran, not that any test would fail if it behaved differently. Lint and type-checking run in CI alongside the coverage gate and the conformance suite. The Nuxt runtime is unit-tested through a lightweight `#imports` mock, so the tests run without booting Nuxt; the PHP suite runs on Testbench against an in-memory sqlite database.
 
 ## References
 

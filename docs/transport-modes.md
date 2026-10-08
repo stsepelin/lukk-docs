@@ -38,7 +38,7 @@ One credential still does: the **two-factor login challenge token**. It is issue
 
 **Why choose it**
 
-- The browser holds **no session token** (access, refresh, or confirmation), so XSS can't exfiltrate one. Two short-lived, non-credential cookies do reach it — the [logout note and the signed-out answer](/configuration#session-name) — and neither carries a value.
+- The browser holds **no session token** (access, refresh, or confirmation), so XSS can't exfiltrate one. Two short-lived, non-credential cookies do reach it — the [logout note and the signed-out answer](/configuration#session-name) — and neither is a credential: the signed-out answer is a bare marker, and the note carries only the moment the logout was asked for.
 - Clean SSR: the server reads the sealed session and hydrates both the authenticated **data** and the auth **state** (`user` / `loggedIn`), so authenticated pages render logged-in on the first paint — no flash, no `<ClientOnly>` (see [SSR hydration](#ssr-hydration)).
 - No CORS — the browser only talks to your own origin.
 
