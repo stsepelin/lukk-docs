@@ -59,6 +59,18 @@ The `iss` and `aud` claims stamped into every token and validated on every reque
 | `claim_seconds` | `0` (off) | **lukk 0.7.0.** A session a sign-in starts must be *claimed* within this window — by `POST /auth/session/claim`, an authenticated request to this lukk app, or a refresh. If it isn't, the first late use of the credential issued at sign-in revokes the whole session and fires [`SessionUnclaimed`](/events#sessionunclaimed). It ends sessions whose sign-in response never reached the client (a dropped connection, an aborted request), which otherwise stay alive until their refresh token expires. `600` suits most apps.<br><br>**The contract:** every client must claim within the window. lukk-js calls the claim route right after each sign-in. A client that uses its access token only on *another* service never touches this app, so it must call the route too. Only the original sign-in credential is ever revoked: a token minted by a later refresh counts as a claim. For a refresh token that is exact — the family's first row, the one with no predecessor — while an access token, which carries no lineage, is matched on its `iat` within a couple of seconds of the sign-in. The window is never shorter than `access_ttl` + `leeway`, or 60 seconds. Sessions with a pinned grant (personal access tokens, impersonation) are never marked. A replacement `RefreshTokenRepository` must return [`original`](/customization#swapping-storage) on its records (or, less precisely, `createdAt`); with neither, a late original refresh token isn't recognised (it fails open, with a warning logged once per worker process). Markers live in the denylist cache: losing them fails open, and restoring an old snapshot can at most revoke a session still presenting its original refresh token after the window. Costs one cache read per authenticated request when on, none when off. |
 | `leeway` | `5` | Clock-skew tolerance, in seconds, applied when validating the `exp` and `nbf` claims. |
 
+### Sign-in timebox
+
+```php
+'login_timebox_micros' => (int) env('LUKK_LOGIN_TIMEBOX_MICROS', 500_000),
+```
+
+**lukk 0.7.0.** How long a **failed** sign-in takes, in microseconds, whatever the reason it failed. Equal hashing work isn't equal time: an unknown identifier hashes at the configured cost, while a real account is checked at the cost stored in its hash, so a row left at a lower cost by a `BCRYPT_ROUNDS` bump answers measurably faster. lukk equalizes the work first (see [Security](/security#login-responses)), and this box hides what is left. A **successful** sign-in leaves the box at once — its status code already says it succeeded.
+
+Set it above one derivation at your configured cost plus one at the oldest cost still stored, measured on your own hardware (`php -r 'password_hash("x", PASSWORD_BCRYPT, ["cost"=>12]);'`). Too low is ineffective, not harmful: a timebox pads a fast path and never shortens a slow one. `0` switches it off. Read per guard.
+
+The forgot-password route has its own box, [`password_reset.timebox_micros`](/password-reset#setup).
+
 ### Rate limits
 
 The configurable throttles live here, each shaped as `{ max_attempts, decay_seconds }` (login adds `ip_max_attempts` and `account_max_attempts`), plus one scalar — `ipv6_prefix` — that applies to them all. Two more buckets exist without a key of their own; they [borrow `refresh`](#throttles-without-a-key-of-their-own) and are described below the table.
@@ -76,7 +88,7 @@ The configurable throttles live here, each shaped as `{ max_attempts, decay_seco
 
 | Limit | Default | Keyed on | Notes |
 |---|---|---|---|
-| `login` | 5 / 60s (+ `ip_max_attempts` 30, `account_max_attempts` 20) | normalized email + IP | Failures-only: only failed attempts count, a success clears the counter, and tripping it returns a `429` validation error. **`ip_max_attempts`** (env `LUKK_LOGIN_IP_MAX_ATTEMPTS`) is a separate coarse per-IP cap on *all* login attempts, bounding password-spraying across many emails. **`account_max_attempts`** (env `LUKK_LOGIN_ACCOUNT_MAX_ATTEMPTS`) is an IP-**independent** per-account cap, so a botnet can't take `max_attempts` guesses *per source IP* against one account. |
+| `login` | 5 / 60s (+ `ip_max_attempts` 30, `account_max_attempts` 20) | account + IP | Failures-only: only failed attempts count, a success clears the counter, and tripping it returns a `429` validation error. **`ip_max_attempts`** (env `LUKK_LOGIN_IP_MAX_ATTEMPTS`) is a separate coarse per-IP cap on *all* login attempts, bounding password-spraying across many emails. **`account_max_attempts`** (env `LUKK_LOGIN_ACCOUNT_MAX_ATTEMPTS`) is an IP-**independent** per-account cap, so a botnet can't take `max_attempts` guesses *per source IP* against one account. From lukk 0.7.0 "account" is the one the identifier names, so a look-alike address (another case, a Cyrillic а) that is a *different* account counts separately and can't clear this one; an identifier naming no account is counted under its case- and script-folded form. |
 | `two_factor` | 5 / 60s | account (`sub`) | Throttles challenge-code guesses for a single account. Also guards the endpoint per IP. |
 | `refresh` | 30 / 60s | IP | Per-IP guard on `POST /auth/refresh`. |
 | `passkeys` | 30 / 60s | IP | Per-IP guard on the passkey login + assertion-options endpoints. |
@@ -269,7 +281,7 @@ Used only when `features.passkeys` is enabled. See [Passkeys](/passkeys).
 | `rp_id` | **required** | The registrable domain shared by your front-end and API — e.g. `example.com`, **not** `api.example.com`. Throws if unset when passkeys are enabled. |
 | `origins` | **required** | Allowed browser origins (your front-end), as a comma-separated `LUKK_PASSKEY_ORIGINS` value. An empty list is rejected. |
 | `challenge_ttl` | `120` (2 min) | How long a WebAuthn challenge is valid. |
-| `user_verification` | `required` | Whether the authenticator must verify the user (biometric/PIN), not just their presence. Default `required` makes passwordless login + step-up phishing-resistant (AAL2). Lower to `preferred` only for authenticators that can't verify the user. One of `required`, `preferred`, `discouraged`. |
+| `user_verification` | `required` | What a passkey **login** asks the authenticator for: verify the user (biometric/PIN), not just their presence. Lower to `preferred` only for authenticators that can't verify the user. One of `required`, `preferred`, `discouraged`. From lukk 0.7.0 it no longer decides whether a login counts as multi-factor — that is read from each assertion ([see why](/passkeys#when-a-passkey-counts-as-multi-factor)) — and a step-up sets its own requirement from the account's level. |
 
 ## Client (Nuxt)
 

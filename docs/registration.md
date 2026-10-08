@@ -108,6 +108,8 @@ The default rules (`RegisterRequest`) are `name`, `email` (a valid, **unique** a
 
 Now `POST /auth/login` and `POST /auth/register` take `username` instead of `email` (registration validates it as a plain unique string rather than an email address). Your `users` table needs that column, and if you drop `email` entirely, make it nullable or use `Lukk::registerUsing()` for the create.
 
+From lukk 0.7.0, while `app.debug` is on, sign-in refuses a `lukk.username` that names no column on the users table, and says what to fix. A typo is otherwise quiet on SQLite, which reads a double-quoted identifier matching no column as a string literal, so the lookup matches every row; PostgreSQL and MySQL answer it with an unexplained `500`. The check applies to the stock `EloquentUserProvider` only, and costs one schema read per sign-in in debug, and one class comparison and a config read in production. An unset, null or empty `lukk.username` falls back to `email`.
+
 ### Register-only (no auto-login)
 
 By default a successful register signs the user in (returns a token pair). Set `registration.login` to `false` to **create the account only** — the endpoint returns a `201` and the user logs in separately:

@@ -47,8 +47,9 @@ In this order, and the order is the substance:
 
 > [!IMPORTANT]
 > **Lockout counters occupy three key spaces**, and the raw identifier is none of them:
-> `id:<user id>` for a login failure against a real account, `idn:<normalized identifier>` for one
-> naming no account, and the bare user id for the step-up and two-factor caps. Step 1 exists because
+> `id:<user id>` for a login failure against a real account, `idn:sha256:<digest>` for one
+> naming no account (`idn:<normalized identifier>` for a lock written before lukk 0.7.0, which erasure
+> still sweeps), and the bare user id for the step-up and two-factor caps. Step 1 exists because
 > the `idn:` space is reachable only through the identifier — read it after the row is gone and those
 > rows are unreachable forever, still naming someone who asked to be forgotten.
 

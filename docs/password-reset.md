@@ -35,8 +35,11 @@ Your user model must implement `CanResetPassword` (Laravel's default `App\Models
     'frontend_url' => env('LUKK_RESET_URL'), // e.g. https://app.example.com/reset-password
     'revoke_sessions' => true,                // kill existing sessions on reset (recommended)
     'broker' => null,                         // null = your app's default auth.passwords broker
+    'timebox_micros' => (int) env('LUKK_RESET_TIMEBOX_MICROS', 1_000_000),
 ],
 ```
+
+`timebox_micros` (lukk 0.7.0, default one second) is how long every `forgot-password` request takes, whether or not the address has an account — see [Security notes](#security-notes). `0` switches it off.
 
 Set `broker` (or `LUKK_RESET_BROKER`) only if you reset against a **non-default** `auth.passwords` broker — e.g. a separate admin guard with its own token table. `null` uses `config('auth.defaults.passwords')`.
 
@@ -81,7 +84,7 @@ Set it to `false` only if you have a specific reason to keep other sessions aliv
 
 - **No user enumeration.** `forgot-password` returns the same `200` for a registered and an unknown email, and the per-email `throttle` is enforced by the broker — so the endpoint can't be used to probe which addresses have accounts. `reset-password` is hardened the same way: every failure (unknown user, bad/expired token, throttled) returns one **generic** `422`, so it never reveals whether an email is registered either.
 - **Single-use, expiring tokens.** The reset token is broker-managed: hashed at rest, consumed on success, and invalid after `expire` minutes.
-- **Flatten the timing.** The response body is identical for known and unknown emails, but a registered address does extra work (mint a token, send the mail) before responding. Run mail on a queue (`QUEUE_CONNECTION` other than `sync`, or a `ShouldQueue` notification) so `forgot-password` returns before the email is sent and the two paths take the same time.
+- **Flat timing.** The response body is identical for known and unknown emails, but a registered address does extra work (hash and store a token, send the mail) before responding. From lukk 0.7.0 the whole request is padded to `password_reset.timebox_micros` (default one second, env `LUKK_RESET_TIMEBOX_MICROS`), so both paths take at least that long. The box only pads — it never shortens — so set it above the broker's own box (`auth.timebox_duration`, 200 ms by default) plus one bcrypt derivation at your cost plus the notification dispatch. **Queue the notification** (`QUEUE_CONNECTION` other than `sync`, or a `ShouldQueue` notification): a synchronous SMTP send can overrun any budget, and it's what you'd do anyway if one second is too long for your users.
 - **Sessions die by default.** `revoke_sessions` closes the "attacker keeps their session after the owner resets" hole — see above.
 - **No auto-login, no token leak.** Reset never mints tokens; the user re-authenticates through the normal login flow. Nothing secret is placed in the redirect URL beyond the broker's own reset token.
 

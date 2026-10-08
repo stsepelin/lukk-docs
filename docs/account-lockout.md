@@ -71,15 +71,15 @@ Three authenticators get their own independent counter, distinguished by a `purp
 
 | Purpose | Subject | Counted failure |
 |---|---|---|
-| `login` | `id:<primary key>` when the identifier names an account; `idn:<normalized>` when it doesn't | A failed `POST /auth/login` |
+| `login` | `id:<primary key>` when the identifier names an account; `idn:sha256:<digest of the normalized identifier>` when it doesn't | A failed `POST /auth/login` |
 | `two_factor` | The user id | A failed TOTP code at `POST /auth/two-factor-challenge` |
 | `confirm` | The user id | A failed password at `POST /auth/confirm-password` |
 
 `confirm` matters because [step-up confirmation](/confirmation) re-verifies the *same* password as login. Without it, a caller already holding an access token — a stolen one, an XSS'd one, a shared device — could keep guessing behind the sudo gate while the login route stayed capped. `POST /auth/confirm-passkey` is throttled but deliberately **not** locked: an assertion is a signature, not a guessable secret, so there is nothing to cap.
 
-The `login` subject keys on **identity**, not on the submitted string. Normalizing (trim, lowercase, transliterate) is many-to-one across real accounts — `аdmin@example.com` with a Cyrillic а folds onto `admin@example.com` — so keying on it would let two accounts share one counter, and a password reset on either would clear the other's lock.
+The `login` subject keys on **identity**, not on the submitted string. Normalizing (trim, lowercase, transliterate) is many-to-one across real accounts — `аdmin@example.com` with a Cyrillic а folds onto `admin@example.com` — so keying on it would let two accounts share one counter, and a password reset on either would clear the other's lock. From lukk 0.7.0 the decaying [login throttle](/configuration#rate-limits) buckets key on the account the same way.
 
-The `idn:` fallback is not a leftover: an identifier that names **no account** must still accumulate a counter, or `423`-vs-`422` would answer "does this account exist?" for free. A `login` lock can therefore name an address that was never registered — a lock can name an account that doesn't exist. That's intentional: resolving first would leak account existence through the lockout's timing and behaviour, and lukk's login path is deliberately [constant-time](/security).
+The `idn:` fallback is not a leftover: an identifier that names **no account** must still accumulate a counter, or `423`-vs-`422` would answer "does this account exist?" for free. A `login` lock can therefore name an address that was never registered — a lock can name an account that doesn't exist. From lukk 0.7.0 it names it only by a SHA-256 digest: what was typed is often a real person's address, a typo of it, or a stranger's, a held lock is never pruned, and with no account behind it its owner has nothing through which to ask for it to be erased. The counter only compares for equality, so nothing is lost. Locks written by earlier releases keep their plain `idn:<normalized>` key; `lukk:release`, [account erasure](/account-deletion) and the export still find them. Counting an identifier that names nobody is intentional: skipping it would leak account existence through the lockout's timing and behaviour, and lukk's login path is deliberately [constant-time](/security).
 
 Counters are per [guard](/multiple-guards), so an admin guard and a customer guard never share one.
 

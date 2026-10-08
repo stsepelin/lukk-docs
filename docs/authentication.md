@@ -42,9 +42,9 @@ On success you receive a token pair (the exact shape depends on the [output mode
 }
 ```
 
-Wrong credentials return `422`. Lukk's login is **constant-time**: an unknown email runs the same hashing work as a wrong password, so neither timing nor response shape reveals which accounts exist.
+Wrong credentials return `422`. Lukk's login is **constant-time**: an unknown email runs the same hashing work as a wrong password, so neither timing nor response shape reveals which accounts exist. From lukk 0.7.0 a failed sign-in is also padded to [`login_timebox_micros`](/configuration#sign-in-timebox) (500 ms by default), so expect a failure to take at least that long; a success returns as soon as it's done.
 
-Repeated failures are throttled per account and per IP ([rate limits](/configuration#rate-limits)), returning `429`. Those bound a rate; if you also need the NIST SP 800-63B §5.2.2 cap on *consecutive* failures, enable the opt-in [account lockout](/account-lockout), which answers `423` instead.
+Repeated failures are throttled per account and per IP ([rate limits](/configuration#rate-limits)), returning `429`. The account is the one the identifier resolves to, so a look-alike address belonging to another account has its own count (lukk 0.7.0). Those bound a rate; if you also need the NIST SP 800-63B §5.2.2 cap on *consecutive* failures, enable the opt-in [account lockout](/account-lockout), which answers `423` instead.
 
 > [!NOTE]
 > If the user has confirmed [two-factor authentication](/two-factor-authentication) or you require [passkeys](/passkeys), login returns a challenge instead of tokens. See those pages for the second step.
@@ -88,7 +88,7 @@ sequenceDiagram
 
 - **`POST /auth/logout`** revokes the current session and denylists its family, killing any access token issued for it within one request.
 - **`DELETE /auth/sessions`** revokes every session belonging to the user — useful for a "log out everywhere" button. Requires a valid access token; switch it off with [`features.logout_all`](/configuration#feature-toggles).
-- **`DELETE /auth/sessions/others`** revokes every session except the one making the request — useful after a password change. Requires a valid access token, and answers a bare `204` that leaves the caller's own refresh cookie in place.
+- **`DELETE /auth/sessions/others`** revokes every session except the one making the request — useful after a password change. Requires a valid access token, and answers a bare `204` that leaves the caller's own refresh cookie in place. An access token with no `fid` (a co-issuer's token, in the [verify-only topology](/deployment#splitting-auth-and-api)) has no session to except, so from lukk 0.7.0 the route answers **`409`** rather than a `204` that revoked nothing; use `DELETE /auth/sessions` there.
 
 Up to lukk 0.6, `POST /auth/logout` also required a valid access token — so a client whose access token had expired (an idle tab) got a `401`, nothing was revoked, and in cookie mode the refresh cookie stayed valid for its whole lifetime.
 
