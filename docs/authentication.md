@@ -18,7 +18,7 @@ When `lukk.routes` is `true` (the default), the package registers these routes u
 | `POST` | `/auth/session/claim` | `auth:api`, `throttle:lukk-claim` | Confirm the client received a new session (lukk 0.7.0; see [`claim_seconds`](/configuration#refresh-behavior)). `204`. |
 
 > [!NOTE]
-> Login is limited twice: a per-IP route throttle (`throttle:lukk-login`, 30 attempts a minute by default) and the per-account failure limiter. Both are described in [Configuration → Rate Limits](/configuration#rate-limits), along with the rest — refresh, two-factor, passkeys, and the two buckets with [no key of their own](/configuration#throttles-without-a-key-of-their-own): the claim route (`lukk-claim`, keyed per **user**) and the logout refresh-token lookup, which has no route throttle at all.
+> Login is limited twice: a per-IP route throttle (`throttle:lukk-login`, 30 attempts a minute by default) and the per-identifier failure limiter (keyed on the folded identifier, never the account). Both are described in [Configuration → Rate Limits](/configuration#rate-limits), along with the rest — refresh, two-factor, passkeys, and the two buckets with [no key of their own](/configuration#throttles-without-a-key-of-their-own): the claim route (`lukk-claim`, keyed per **user**) and the logout refresh-token lookup, which has no route throttle at all.
 
 ### Logging in
 
@@ -44,7 +44,7 @@ On success you receive a token pair (the exact shape depends on the [output mode
 
 Wrong credentials return `422`. Lukk's login is **constant-time**: an unknown email runs the same hashing work as a wrong password, so neither timing nor response shape reveals which accounts exist. From lukk 0.7.0 a failed sign-in is also padded to [`login_timebox_micros`](/configuration#sign-in-timebox) (500 ms by default), so expect a failure to take at least that long; a success returns as soon as it's done.
 
-Repeated failures are throttled per account and per IP ([rate limits](/configuration#rate-limits)), returning `429`. From lukk 0.7.0 a success clears only the per-address count; the account-wide one decays, so a look-alike address belonging to another account cannot sign in to reset this account's count. Those bound a rate; if you also need the NIST SP 800-63B §5.2.2 cap on *consecutive* failures, enable the opt-in [account lockout](/account-lockout), which answers `423` instead.
+Repeated failures are throttled per identifier (case- and script-folded) and per IP ([rate limits](/configuration#rate-limits)), returning `429`. From lukk 0.7.0 a success clears only the per-address count; the IP-independent one decays, so a look-alike address belonging to another account cannot sign in to reset this account's count. Those bound a rate; if you also need the NIST SP 800-63B §5.2.2 cap on *consecutive* failures, enable the opt-in [account lockout](/account-lockout), which answers `423` instead.
 
 > [!NOTE]
 > If the user has confirmed [two-factor authentication](/two-factor-authentication) or you require [passkeys](/passkeys), login returns a challenge instead of tokens. See those pages for the second step.

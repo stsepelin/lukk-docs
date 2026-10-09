@@ -77,7 +77,7 @@ impact tags. Read it (and the changelog) before bumping:
 > Smaller ones to check: a failed sign-in now takes at least [`login_timebox_micros`](/configuration#sign-in-timebox)
 > (500 ms) and every `forgot-password` at least `password_reset.timebox_micros` (one second) — raise
 > either if your slowest real path takes longer, and queue the reset notification. A successful
-> sign-in clears only the per-address login bucket; the account-wide one now decays instead. Non-account lockout subjects are stored as `idn:sha256:<digest>`. [Authenticator
+> sign-in clears only the per-address login bucket; the IP-independent one now decays instead. Non-account lockout subjects are stored as `idn:sha256:<digest>`. [Authenticator
 > events](/events#authenticator-events) are new — listen and notify the user. `features.logout_all`
 > is now honoured, and `features.rotation` / `reuse_detection` / `denylist` are removed (they were
 > never read). `LockoutRepository` gained `summariesForSubjects()`. See

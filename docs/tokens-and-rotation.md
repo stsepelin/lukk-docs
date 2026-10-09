@@ -73,11 +73,11 @@ POST /auth/refresh (opaque refresh token RT):
   in a transaction:
     row = SELECT ... WHERE token_hash = h FOR UPDATE
     if no row              -> 401 invalid
-    if row.revoked_at      -> revoke family; 401   (a killed token was replayed)
+    if row.revoked_at      -> revoke family; 401   (a killed token was presented; no event)
     if row.expires_at past -> 401 expired
     if row.rotated_at:
         if within grace    -> mint a fresh successor sibling, same family (a straggler; no logout)
-        else               -> revoke family; 401   (post-grace replay = theft)
+        else               -> revoke family; 401   (post-grace replay = theft; RefreshTokenReused)
     # happy path:
     mark row rotated; insert successor in the same family
   mint a new access token
@@ -93,23 +93,23 @@ flowchart TD
     B -- yes --> N{claim_seconds on,<br/>row would be accepted,<br/>claim window passed?}
     N -- yes --> U[revoke family<br/>outside the transaction] --> V[401 unclaimed · SessionUnclaimed]
     N -- no --> C{revoked?}
-    C -- yes --> K[revoke family + denylist fid<br/>after commit] --> R[401 · RefreshTokenReused]
+    C -- yes --> KR[revoke family + denylist fid<br/>after commit] --> R0[401 · no event]
     C -- no --> D{expired?}
     D -- yes --> X2[401 expired]
     D -- no --> E{already rotated?}
     E -- no --> H[happy path:<br/>mark rotated, mint successor<br/>same family] --> P[200 new pair]
     E -- yes --> G{within grace window?}
     G -- yes --> S[straggler:<br/>mint fresh sibling, same family<br/>no logout] --> P
-    G -- no --> K
+    G -- no --> K[revoke family + denylist fid<br/>after commit] --> R[401 · RefreshTokenReused]
 ```
 
 The family is revoked **after** the transaction commits, never inside it — revoking inside the transaction and then throwing would roll back the revocation while the denylist cache write persisted, leaving an inconsistent state.
 
 ## Reuse detection
 
-Rotation alone isn't the point; reuse detection is what makes it worth doing. When a token that has **already been consumed** (or already revoked) is presented after the grace window, that's the signature of a stolen token being replayed — so lukk revokes the **entire family** and denylists it by `fid`, killing every live access token for that session within one `access_ttl`. It also dispatches [`RefreshTokenReused`](/events) so you can alert on it.
+Rotation alone isn't the point; reuse detection is what makes it worth doing. When a token that has **already been consumed** is presented after the grace window, that's the signature of a stolen token being replayed — so lukk revokes the **entire family** and denylists it by `fid`, killing every live access token for that session within one `access_ttl`. It also dispatches [`RefreshTokenReused`](/events) so you can alert on it.
 
-That event fires **only** for a genuine replay. Presenting a token that was already revoked — the ordinary case of a client retrying with one it still held across a logout — still force-revokes the family and still returns `401`, but is not reported as reuse: it isn't evidence of theft, and a steady drip of benign events would bury the alarm that is.
+That event fires **only** for a genuine replay — a consumed token presented past the grace window. Presenting a token that was already revoked — the ordinary case of a client retrying with one it still held across a logout — still force-revokes the family and still returns `401`, but is not reported as reuse: it isn't evidence of theft, and a steady drip of benign events would bury the alarm that is.
 
 ## The grace window
 

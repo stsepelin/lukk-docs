@@ -99,7 +99,7 @@ The default rules (`RegisterRequest`) are `name`, `email` (a valid, **unique** a
 
 ### Username instead of email
 
-`lukk.username` (default `email`) is the identifier column, Fortify-style — it governs **both login and registration**. Set it once and the whole stack follows: the login/register request field, the constant-time credential lookup, the per-account login throttle, and the default create + validation all use that column.
+`lukk.username` (default `email`) is the identifier column, Fortify-style — it governs **both login and registration**. Set it once and the whole stack follows: the login/register request field, the constant-time credential lookup, the per-identifier login throttle, and the default create + validation all use that column.
 
 ```php
 // config/lukk.php

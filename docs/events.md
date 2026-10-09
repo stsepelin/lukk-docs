@@ -6,7 +6,7 @@ lukk dispatches a small set of Laravel events at security-relevant moments. Atta
 
 ### RefreshTokenReused
 
-When a refresh token that should no longer be usable is presented, lukk force-revokes the entire token family and dispatches `Lukk\Events\RefreshTokenReused`. This is a token-theft signal — listen for it to log or alert:
+When a refresh token that was already consumed is replayed after the [grace window](/tokens-and-rotation#the-grace-window), lukk force-revokes the entire token family and dispatches `Lukk\Events\RefreshTokenReused`. This is a token-theft signal — listen for it to log or alert:
 
 ```php
 use Illuminate\Support\Facades\Event;
@@ -92,7 +92,15 @@ Event::listen(function (AccountLocked $event) {
 });
 ```
 
-`AccountLocked` fires **once, on the transition**, and it is the only signal a locked-out user's account gets — so it's where you'd send the "someone is trying to get into your account" mail. Note that `$subject` is a submitted identifier, not a resolved user: it need not name a real account, so rate-limit anything you send off it.
+`AccountLocked` fires **once, on the transition**, and it is the only signal a locked-out user's account gets — so it's where you'd send the "someone is trying to get into your account" mail. `$subject` names the counter that locked:
+
+| `$subject` | Meaning |
+|---|---|
+| `id:<user id>` | A login lock on an account. The one to notify. |
+| `idn:sha256:<digest>` | A login lock on the identifier's case- and script-folded spelling. It names no one: it locks for an identifier that matches no account, and fires *alongside* the account's own `id:` lock for one that does (a login failure counts against both). Ignore it for notifications. |
+| `<user id>` (bare) | A `two_factor` or `confirm` (step-up) lock. |
+
+Locks written before lukk 0.7.0 for an identifier naming no account carry the older `idn:<identifier>` form.
 
 ### PasswordChanged
 
@@ -149,7 +157,7 @@ lukk also dispatches standard Laravel auth events, so your existing listeners wo
 
 | Event | When |
 |---|---|
-| `Illuminate\Auth\Events\Lockout` | The login throttle trips — an IP has exceeded the failed-login rate limit. Listen to alert on brute-force attempts. |
+| `Illuminate\Auth\Events\Lockout` | The decaying login throttle refuses an attempt — either the per-IP bucket (identifier + address, `max_attempts`) or the IP-independent one (identifier alone, `account_max_attempts`) has tripped. Both key on the folded identifier, never on a resolved account. Listen to alert on brute-force attempts. |
 | `Illuminate\Auth\Events\Registered` | A user completes [registration](/registration). |
 | `Illuminate\Auth\Events\Verified` | A user completes [email verification](/email-verification). |
 | `Illuminate\Auth\Events\PasswordReset` | A user completes a [password reset](/password-reset). |

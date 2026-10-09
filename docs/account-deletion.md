@@ -47,8 +47,8 @@ In this order, and the order is the substance:
 
 > [!IMPORTANT]
 > **Lockout counters occupy three key spaces**, and the raw identifier is none of them:
-> `id:<user id>` for a login failure against a real account, `idn:sha256:<digest>` for one
-> naming no account (`idn:<normalized identifier>` for a lock written before lukk 0.7.0, which erasure
+> `id:<user id>` for the account's login counter, `idn:sha256:<digest>` for the login counter on
+> the folded identifier, which every login failure also counts against (`idn:<normalized identifier>` for a lock written before lukk 0.7.0, which erasure
 > still sweeps), and the bare user id for the step-up and two-factor caps. Step 1 exists because
 > the `idn:` space is reachable only through the identifier — read it after the row is gone and those
 > rows are unreachable forever, still naming someone who asked to be forgotten.
@@ -155,11 +155,11 @@ Everything lukk owns is still erased — only the row's fate changes.
   "sessions": [{ "session": "…", "created_at": "…", "last_rotated_at": "…", "revoked_at": null, "expires_at": "…" }],
   "passkeys": [{ "credential_id": "…", "name": "Yubikey at HQ", "last_used_at": 1787391978 }],
   "two_factor": { "enabled": true, "confirmed_at": "…" },
-  "lockouts": [{ "purpose": "login", "attempts": 3, "locked_at": null, "first_failed_at": 1787391000, "last_failed_at": 1787391978 }]
+  "lockouts": [{ "purpose": "login", "attempts": 3, "locked_at": null, "first_failed_at": "2026-08-22T09:30:00+00:00", "last_failed_at": "2026-08-22T09:46:18+00:00" }]
 }
 ```
 
-`lockouts` arrives with lukk 0.7.0: the [account-lockout](/account-lockout) counters held against the account, which erasure also deletes. It reports the purpose, the attempt count and Unix timestamps — never lukk's internal subject keys. A custom `LockoutRepository` must implement `summariesForSubjects()` to supply it.
+`lockouts` arrives with lukk 0.7.0: the [account-lockout](/account-lockout) counters held against the account, which erasure also deletes. It reports the purpose, the attempt count and ISO-8601 timestamps (`locked_at` is `null` while the counter is not locked) — never lukk's internal subject keys. A custom `LockoutRepository` must implement `summariesForSubjects()` to supply it.
 
 > [!WARNING]
 > **This is the auth slice, not a complete Art. 15 response.** lukk knows about sessions, passkeys,
