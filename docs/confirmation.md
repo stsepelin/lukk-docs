@@ -71,18 +71,18 @@ Content-Type: application/json
 | Session (`amr` / `auth_time` of the presenting token) | Account | Result |
 |---|---|---|
 | carries `mfa`, signed in within `confirm.mfa_max_age` (one day) | any | accepted |
-| anything else — no `mfa`, an `mfa` sign-in older than `mfa_max_age`, or no `amr` claim at all | nothing stronger than the password | accepted |
+| anything else — no `mfa`, an `mfa` sign-in older than `mfa_max_age` or dated in the future, or no `amr` claim at all | nothing stronger than the password | accepted |
 | anything else | a confirmed TOTP on a guard that enforces two-factor, or a user-verifying passkey | **refused — `422` on `password`** |
 
 In the refused case the session confirms with a passkey that verifies the user, or signs in again with its second factor first. Three cases are worth spelling out:
 
 - **A token with no `amr` counts as single-factor.** The claim goes missing in ordinary ways — a refresh on a schema without the [`refresh_tokens.amr` column](/upgrading#highest-impact-change-right-now), a session started by `$user->startSession()` (a magic link, a social login), a co-issuer's token — and treating its absence as "old rule" would let a password-only attacker wait one refresh. **Migrate the `amr` column**, or users with a second factor have to confirm with a passkey or sign in again after every refresh.
-- **`mfa` ages out.** §2.2.3 allows one-factor reauthentication *within* an AAL2 session, whose overall limit SHOULD be about a day, while `mfa` rides every rotation for the whole `refresh_ttl`. So the allowance lasts `confirm.mfa_max_age` (default `86400`) after the sign-in, read from the token's [`auth_time`](/tokens-and-rotation#the-auth-time-claim). Older sessions confirm with a passkey or sign in again.
+- **`mfa` ages out.** §2.2.3 allows one-factor reauthentication *within* an AAL2 session, whose overall limit SHOULD be about a day, while `mfa` rides every rotation for the whole `refresh_ttl`. So the allowance lasts `confirm.mfa_max_age` (default `86400`) after the sign-in, read from the token's [`auth_time`](/tokens-and-rotation#the-auth-time-claim). Older sessions confirm with a passkey or sign in again. An `auth_time` more than [`leeway`](/configuration#refresh-behavior) ahead of the clock is no recent sign-in either, and neither is one that isn't an integer. That matters when you **lower `refresh_ttl`**: `auth_time` is derived as `expires_at − refresh_ttl`, so every session signed in before the change moves forward by the difference, and a weeks-old sign-in would otherwise pass as brand new. Those sessions need a fresh multi-factor sign-in (or a passkey) to step up; raising `refresh_ttl` only ages them sooner.
 - **A single-factor passkey followed by a TOTP** is `["pop","user","otp"]` — two possession factors, not `mfa` — so that session is refused here too.
 
 An enrolled TOTP counts only where the guard enforces two-factor: with `features.two_factor` off, login never asks for the code, so no session there could carry `mfa` and the step-up would be locked away for good. The refusal comes before the password is checked, so it spends no lockout attempt and says nothing about the password. `Lukk::actingAs()`, which presents no token, keeps the old rule.
 
-A password over 72 bytes against a bcrypt hash is answered with its own `422` on `password` — "Reset your password to continue" — after the check has run, since bcrypt could verify only its first 72 bytes and earlier releases stored it truncated. See [Password policy](/security#password-policy).
+A stored hash the active hasher refuses — another algorithm, or a `$2b$` import with `hashing.bcrypt.verify` on — is a credential nobody can present, so it gets the ordinary `422` on `password`, not a `500`, as at sign-in. A password over 72 bytes against a bcrypt hash is answered with its own `422` on `password` — "Reset your password to continue" — after the check has run, since bcrypt could verify only its first 72 bytes and earlier releases stored it truncated. See [Password policy](/security#password-policy).
 
 #### With a passkey
 

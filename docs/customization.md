@@ -72,6 +72,8 @@ use App\Models\RefreshToken;
 Lukk::useRefreshTokenModel(RefreshToken::class);
 ```
 
+The model may live on its own connection (`protected $connection`). Rotation and bulk revocation open their transaction on that connection (lukk 0.7.0) — earlier releases opened it on the default one, so the row lock was taken in autocommit and released at once, and rotation and reuse detection were not atomic.
+
 > [!NOTE]
 > **`$timestamps = false` is safe here.** [`claim_seconds`](/configuration#refresh-behavior) recognises a session's original refresh token by its lineage — the row persisted with no predecessor — not by `created_at`, and the window itself is measured from the marker lukk wrote at sign-in. Timestamps are still worth keeping for the data-subject export, which reports when each session began.
 

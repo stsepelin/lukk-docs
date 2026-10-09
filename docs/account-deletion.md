@@ -42,7 +42,8 @@ In this order, and the order is the substance:
 2. **Revokes every session** — denylist first, so every access token dies immediately across every
    node.
 3. **Erases lukk's artifacts and the user**, in one transaction: refresh tokens, passkeys,
-   two-factor material, lockout counters, then the row itself.
+   lockout counters, a pending password-reset row, then the row itself (which carries the two-factor
+   material).
 4. **Fires `AccountDeleted`** after the commit.
 
 > [!IMPORTANT]
@@ -54,6 +55,8 @@ In this order, and the order is the substance:
 > rows are unreachable forever, still naming someone who asked to be forgotten.
 
 Passkeys are erased through whatever [`PasskeyRepository`](/customization#available-contracts) is bound, and the export reads them the same way (lukk 0.7.0). Earlier releases checked for a table literally named `passkeys` first, so a store that isn't that table — Redis, another service, a renamed model — was skipped: erasure reported success while the passkeys survived, and the export omitted them. A replacement store must therefore answer an empty or not-yet-provisioned store with `0` and `[]` rather than throw.
+
+The pending password-reset row is deleted through the broker named by [`password_reset.broker`](/password-reset#setup) (or the default one) whenever that broker's table exists — whether or not `features.password_reset` is on, because the row holds the email address in plaintext and Laravel doesn't garbage-collect the table by default. The table is looked for on the broker's own connection, `auth.passwords.<broker>.connection` (lukk 0.7.0); earlier releases looked on the default connection, so a broker on another one kept the row after the account was gone.
 
 Steps 2 and 3 are ordered deliberately too. Revoking first means a failure later leaves the account
 **unreachable** rather than half-erased and still usable. And running everything else in one

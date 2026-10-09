@@ -88,7 +88,10 @@ impact tags. Read it (and the changelog) before bumping:
 >   enforces, or a user-verifying passkey, unless the session's token carries `mfa` in `amr` **and** its
 >   `auth_time` is within the new [`confirm.mfa_max_age`](/configuration#confirmation) (one day). **A token
 >   with no `amr` counts as single-factor** — so migrate the `amr` column, or such users must confirm with a
->   passkey or sign in again after every refresh. [Details](/confirmation#with-a-password).
+>   passkey or sign in again after every refresh. An `auth_time` more than `leeway` in the future counts
+  as no recent sign-in at all — and since `auth_time` is derived as `expires_at − refresh_ttl`,
+  **lowering `refresh_ttl` moves every older session forward**, so those sessions need a fresh
+  multi-factor sign-in before they can step up with a password. [Details](/confirmation#with-a-password).
 > - **Cookie mode: token routes require JSON.** `login`, `register`, `refresh`, `two-factor-challenge`
 >   and `passkeys/login` answer **`415`** unless the request has a JSON body or `Sec-Fetch-Site:
 >   same-origin`/`none` (login CSRF, RFC 6265bis §5.7). Send `{}` as JSON for a cookie refresh; lukk-js
@@ -96,7 +99,8 @@ impact tags. Read it (and the changelog) before bumping:
 >   cookie at all. [Details](/authentication#output-modes).
 > - **Under bcrypt, a password over 72 bytes is refused** — a `422` on register, reset and
 >   change-password (lukk adds the check after a [`registerValidation()`](/registration#customizing-the-user-s-fields)
->   rule set too, but not when a `registerUsing()` hook does the create). **Sign-in, step-up and
+>   rule set too — under a `registerUsing()` hook only the string and NUL-byte checks, not the 72-byte
+  rule, which is bcrypt's). **Sign-in, step-up and
 >   change-password's current password** refuse one against a bcrypt hash (`$2a$`/`$2b$`/`$2x$`/`$2y$`),
 >   which lukk could verify only in part — and every earlier lukk release stored such passwords,
 >   truncated. Those users are typing the right password: they get a `422` saying "This password is longer
@@ -126,6 +130,8 @@ lukk `0.7.0`'s smaller changes, each with what to check:
 | `lukk:secret --guard` refuses a name that isn't letters, digits, `_` or `-`. | Low | None. |
 | [Authenticator events](/events#authenticator-events) are new. | Low | Listen and notify the user out of band (NIST SP 800-63B-4 §4.1.2.1). |
 | `LogoutResponse` clears the cookie per guard and takes `bool $clearRefreshCookie`. | Low | A rebound one must honour the flag — see the logout warning above. |
+| Refresh rotation, bulk revocation and recovery-code redemption open their transaction on the model's own connection; erasure checks the broker's reset table on `auth.passwords.<broker>.connection`. | Low | None. If a [`useRefreshTokenModel`](/customization#swapping-the-refresh-token-model) model or your user model sits on another connection, rotation and redemption were not atomic before — upgrade. |
+| Confirm-password and change-password answer `422`, not `500`, when the stored hash is one the hasher refuses (another algorithm, a `$2b$` import with `hashing.bcrypt.verify` on). | Low | None — sign-in already failed that closed. |
 
 See [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md) for the full text of each.
 
@@ -181,7 +187,8 @@ The same release (with `lukk-core` 0.12.0) also changes:
   browser closed; now they stay signed in like direct-mode users. A cleared session's cookie is deleted.
 - **The app-API proxy keeps CORS your app's own:** it drops the upstream's `Access-Control-*` and
   hop-by-hop headers and removes `Origin` upstream. The headers it strips (`Origin`, `Cookie`, the
-  spoofable forwarding set, anything named in `Connection`) are now removed, not forwarded empty.
+  spoofable forwarding set, anything named in `Connection`) are now removed, not forwarded empty. A
+  header the browser itself sent empty is still forwarded as sent.
 - **Both proxies refuse a `cross-site` or `same-site` GET that isn't a top-level navigation** (an `<img>`
   pointing at them, say) with `403` — the app-API proxy now too, since it injects the bearer. Only
   `Sec-Fetch-Dest: document` counts as top-level, so a navigation into an `<iframe>`, `<frame>`, `<embed>`
@@ -196,12 +203,18 @@ The same release (with `lukk-core` 0.12.0) also changes:
 - **The 15-second upstream deadline** covers the auth proxy's own calls to lukk, body included, and the
   background revoke of a dropped session — but **never a refresh**, which waits for lukk's answer: lukk
   commits a rotation on receipt, so abandoning it would lose the new token and the next refresh, past
-  grace, would revoke the whole family (RFC 9700 §4.14.2).
+  grace, would revoke the whole family (RFC 9700 §4.14.2). A request is still not held on a slow
+  refresh: after 15 s `/api/_lukk/refresh` answers `503` with `Retry-After: 5`, keeping the session, and
+  the retry joins the refresh still in flight. A refresh that never settles stops being shared after
+  five minutes.
 - **`session.maxAge` must be a positive whole number of seconds.** Anything else fails the build (`0`
   used to seal sessions that never expire), and a runtime override that isn't one makes every session
   write throw.
 - **`user.endpoint` resolves under `app.baseURL` in BFF mode**, like the proxy mount it points at. In
-  direct mode `useLukkFetch` no longer prefixes a relative `api.target` with the app's base.
+  direct mode `useLukkFetch` no longer prefixes a relative `api.target` with the app's base. **Action
+  needed** if you worked around the old behaviour with a base-prefixed *relative* endpoint:
+  `'/admin/api/me'` under `app.baseURL: '/admin/'` now resolves to `/admin/admin/api/me` and `404`s,
+  which signs everyone out on load. Drop the prefix (`'/api/me'`). An absolute endpoint keeps working.
 - **`useLukkFetch` sends credentials only where it has checked they belong.** Its default is
   `credentials: 'same-origin'`, upgraded per request; a call that passes its own `onRequest` (replacing
   lukk's) or a per-call `baseURL` on another origin now goes out **without** the session cookie or

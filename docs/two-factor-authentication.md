@@ -125,7 +125,7 @@ sequenceDiagram
 
 Recovery codes let a user authenticate if they lose their device. Each code works **once**. Submit one as `recovery_code` (instead of `code`) to `/auth/two-factor-challenge`. Users can regenerate the full set at any time via `/auth/two-factor/recovery-codes`, which invalidates the old codes.
 
-A recovery code is matched before the user's row is locked, and only spending it takes the lock, so a wrong guess no longer stalls every other write to the account while each stored code is hashed (lukk 0.7.0). Concurrent redemptions still spend a code once.
+A recovery code is matched before the user's row is locked, and only spending it takes the lock, so a wrong guess no longer stalls every other write to the account while each stored code is hashed (lukk 0.7.0). Concurrent redemptions still spend a code once — the lock is taken in a transaction on the user model's own connection, so a user table on a separate directory database is covered too (lukk 0.7.0; earlier releases opened the transaction on the default connection, where the lock was released at once and two redemptions of one code could both succeed).
 
 ### Events
 
