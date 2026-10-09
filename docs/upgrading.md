@@ -220,9 +220,13 @@ The same release (with `lukk-core` 0.12.0) also changes:
   ahead with the old access token; an SSR render leaves the session to the client. Every rotation is
   [journalled](/transport-modes#a-slow-rotation) per session, from the token it consumed to the pair it
   produced, and a request still presenting a consumed token is handed the chain's newest pair instead of
-  replaying it — ten minutes for a link nobody received, 30 s once its pair has reached the session. Those
-  replays never reach lukk, so its reuse detection and `RefreshFamilyForked` don't see them (a bounded
-  deviation from RFC 9700 §4.14.2). An `expires_in` handed out after a slow refresh now counts from when
+  replaying it — ten minutes for a link nobody received, 30 s once its pair has reached the session,
+  counted from when the BFF received the pair and only ever shortened. So the journal can answer a replay
+  up to a refresh's duration + 30 s after lukk rotated — past lukk's own grace window, on a slow refresh —
+  and those replays never reach lukk, so its reuse detection and `RefreshFamilyForked` don't see them.
+  Both are deliberate deviations (the second from RFC 9700 §4.14.2), bounded to these windows and traded
+  against a false logout. If the response carrying a pair is lost and its window closes first, the
+  browser's replay of the consumed token still revokes the session. An `expires_in` handed out after a slow refresh now counts from when
   lukk minted the token. **The journal is per process**: behind a multi-instance BFF without sticky
   sessions, use sticky sessions or raise lukk's grace window if lukk can be slow to rotate. A refresh that
   never settles stops being shared after five minutes.
