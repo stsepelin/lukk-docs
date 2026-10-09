@@ -66,6 +66,17 @@ Content-Type: application/json
 { "confirmation_token": "..." }
 ```
 
+**A password step-up meets the account's own level** (lukk 0.7.0), as the passkey one already did. The confirmation token binds and removes authenticators, which NIST SP 800-63B-4 §4.1.2.1 puts at "the maximum AAL currently available in the subscriber account"; §2.2.3 lets an AAL2 session reauthenticate with one factor. So `confirm-password`:
+
+| Session (`amr` of the presenting token) | Account | Result |
+|---|---|---|
+| carries `mfa` | any | accepted |
+| has no `amr` claim (minted before the `amr` column existed, or by a co-issuer) | any | accepted — the pre-0.7 rule |
+| single-factor (`amr` without `mfa`) | nothing stronger than the password | accepted |
+| single-factor (`amr` without `mfa`) | a confirmed TOTP, or a user-verifying passkey | **refused — `422` on `password`** |
+
+In the refused case the session confirms with a passkey that verifies the user, or signs in again with its second factor first. Note that a single-factor passkey followed by a TOTP is `["pop","user","otp"]` — two possession factors, not `mfa` — so that session is refused here too. The refusal comes before the password is checked, so it spends no lockout attempt and says nothing about the password.
+
 #### With a passkey
 
 If [passkeys](/passkeys) are enabled, a passkey assertion earns the same token, so passkey-only users can step up too. Get the ceremony from the authenticated options route, then post the assertion:
@@ -136,8 +147,8 @@ A request that reaches a gated route without a valid, fresh token receives `423 
 ```ts
 const {
   confirmed,        // ComputedRef<boolean> — is a confirmation currently held?
-  required,         // Ref<boolean> — a withConfirmation() action is waiting on your modal
-  token,            // Ref<string | null>
+  required,         // Readonly<Ref<boolean>> — a withConfirmation() action is waiting on your modal
+  token,            // Readonly<Ref<string | null>>
   confirmPassword,  // (password) => Promise<void>
   withConfirmation, // <T>(action: () => Promise<T>) => Promise<T> — per-action modal flow
   cancel,           // () => void — abort a pending withConfirmation
@@ -178,7 +189,7 @@ await confirmPassword(currentPassword)
 // confirmed.value === true
 ```
 
-A wrong password throws a typed [`LukkError`](/lukk-core#errors). Call `clear()` to drop the confirmation early (it also clears on [logout](/authentication#logging-out-1)).
+A wrong password throws a typed [`LukkError`](/lukk-core#errors) (`422`). So does a password step-up [refused for the account's level](#with-a-password) — a single-factor session on an account with a second factor — also a `422` on `password`; offer [passkey confirmation](#confirming-with-a-passkey) there, or a fresh sign-in with the second factor. Call `clear()` to drop the confirmation early (it also clears on [logout](/authentication#logging-out-1)).
 
 In BFF mode, a confirmation can also reject with **`409`** when the session that asked for it was replaced by a sign-in (or ended by a logout, perhaps in another tab) while the request was out. The confirmation belonged to that session, so the proxy doesn't store it; re-confirm once the page shows the current session.
 
@@ -230,7 +241,7 @@ const password = ref('')
 </template>
 ```
 
-`withConfirmation` drops a stale confirmation on the `423`, so it always re-prompts when the server genuinely requires one (rather than trusting an expired client flag). `cancel()` rejects the pending action.
+`withConfirmation` drops a stale confirmation on the `423`, so it always re-prompts when the server genuinely requires one (rather than trusting an expired client flag). `cancel()` rejects the pending action. A pending action is also cancelled when its session ends — on `logout()` and on every sign-in (lukk-nuxt) — so a confirmation earned later, perhaps by another account on the same tab, can never run the old action unasked.
 
 #### Per-page (a section)
 

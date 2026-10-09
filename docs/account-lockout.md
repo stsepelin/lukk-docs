@@ -88,7 +88,7 @@ The decaying [login throttle](/configuration#rate-limits) is a different mechani
 
 The `idn:` counter is not a leftover: an identifier that names **no account** must still accumulate a counter, or `423`-vs-`422` would answer "does this account exist?" for free. A `login` lock can therefore name an address that was never registered — a lock can name an account that doesn't exist. From lukk 0.7.0 it names it only by a SHA-256 digest: what was typed is often a real person's address, a typo of it, or a stranger's, a held lock is never pruned, and with no account behind it its owner has nothing through which to ask for it to be erased. The counter only compares for equality, so nothing is lost. Locks written by earlier releases keep their plain `idn:<normalized>` key; `lukk:release`, [account erasure](/account-deletion) and the export still find them. Counting an identifier that names nobody is intentional: skipping it would leak account existence through the lockout's timing and behaviour, and lukk's login path is deliberately [constant-time](/security).
 
-Counters are per [guard](/multiple-guards), so an admin guard and a customer guard never share one.
+Counters are per [guard](/multiple-guards), so an admin guard and a customer guard never share one. From lukk 0.7.0 `features.lockout` and the `lockout` block are read per guard too, so an extra guard can turn the lockout on for itself ([example](/multiple-guards#setup)); earlier releases read only the global block.
 
 ### Recovery codes are exempt
 

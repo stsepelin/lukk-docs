@@ -34,6 +34,7 @@ Your user model must implement `CanResetPassword` (Laravel's default `App\Models
 'password_reset' => [
     'frontend_url' => env('LUKK_RESET_URL'), // e.g. https://app.example.com/reset-password
     'revoke_sessions' => true,                // kill existing sessions on reset (recommended)
+    'revoke_passkeys' => (bool) env('LUKK_RESET_REVOKE_PASSKEYS', false), // also remove every passkey
     'broker' => null,                         // null = your app's default auth.passwords broker
     'timebox_micros' => (int) env('LUKK_RESET_TIMEBOX_MICROS', 1_000_000),
 ],
@@ -68,7 +69,7 @@ These routes are registered only when `features.password_reset` is enabled. Both
 | `POST` | `/auth/forgot-password` | throttle | Email a reset link. Body `{ email }`. Always `200` (no enumeration). |
 | `POST` | `/auth/reset-password` | throttle | Set the new password. Body `{ token, email, password, password_confirmation }`. `200` on success, `422` on a bad/expired token or a weak/mismatched password. |
 
-The new password is validated with Laravel's `Illuminate\Validation\Rules\Password::defaults()`, so you can tune complexity rules app-wide the usual way.
+The new password is validated with Laravel's `Illuminate\Validation\Rules\Password::defaults()`, so you can tune complexity rules app-wide the usual way — see [Password policy](/security#password-policy). Under bcrypt a new password over 72 bytes is a `422` (lukk 0.7.0).
 
 ### Session revocation
 
@@ -79,6 +80,10 @@ Set it to `false` only if you have a specific reason to keep other sessions aliv
 ```php
 'password_reset' => ['revoke_sessions' => false],
 ```
+
+**Passkeys survive a reset by default**, as the second factor does: a reset proves control of the mailbox, not of the authenticators. That also means a passkey an attacker enrolled while holding the password — or one enrolled on an account squatted before its owner verified it — outlives the recovery. Set `revoke_passkeys` (env `LUKK_RESET_REVOKE_PASSKEYS`, lukk 0.7.0, default `false`) to make a reset mean "start over": it removes every passkey on the account and dispatches [`PasskeyDeleted`](/events#authenticator-events) for each.
+
+The new password is written to the column your model names (`getAuthPasswordName()`), the one sign-in reads — up to lukk 0.6 reset and change-password always wrote `password`, so a model with another password column got a `500`.
 
 ### Security notes
 

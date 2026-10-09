@@ -139,6 +139,8 @@ The client never asks you to manage any of this. On a `401` it calls refresh onc
 
 Because the denylist is consulted on every request, revocation is instant. It's held in the **cache, not a table** — keyed by `jti` and `fid`, with each entry self-evicting when the token it revokes would have expired anyway. That makes revocation O(revoked sessions) rather than O(all tokens). A logout revokes one session; `DELETE /auth/sessions` revokes them all.
 
+An entry lives for `access_ttl + leeway` — or longer, when a longer-lived token may still be out there (lukk 0.7.0). Every mint records the longest access-token lifetime this guard has issued, in the denylist store, for exactly as long as such a token can live, and a revoke covers at least that; it also covers the remaining life of the token presented with the request, which catches a rebound `TokenIssuer` that sets its own `exp`. So **lowering `access_ttl` during an incident no longer brings revoked tokens back**: before, a family revoked after the change got an entry sized to the new, shorter TTL, which expired while the older, longer tokens were still valid (RFC 7009 §2.2).
+
 ## Database schema
 
 ```php

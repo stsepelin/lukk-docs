@@ -42,7 +42,7 @@ One credential still does: the **two-factor login challenge token**. It is issue
 - Clean SSR: the server reads the sealed session and hydrates both the authenticated **data** and the auth **state** (`user` / `loggedIn`), so authenticated pages render logged-in on the first paint — no flash, no `<ClientOnly>` (see [SSR hydration](#ssr-hydration)).
 - No CORS — the browser only talks to your own origin.
 
-**The CSRF trade-off.** Moving tokens server-side trades XSS-exfiltration risk for CSRF risk: the proxy is authenticated by the ambient session cookie. lukk-nuxt closes this — the session cookie is `__Host-lukk-session` (`SameSite=Strict; Secure; HttpOnly; Path=/`, no `Domain`), **and** the proxy rejects any state-changing request whose `Origin` doesn't match your app (a `403`). You don't need to add your own CSRF layer for `/api/_lukk/**`.
+**The CSRF trade-off.** Moving tokens server-side trades XSS-exfiltration risk for CSRF risk: the proxy is authenticated by the ambient session cookie. lukk-nuxt closes this — the session cookie is `__Host-lukk-session` (`SameSite=Strict; Secure; HttpOnly; Path=/`, no `Domain`), **and** the proxy rejects any state-changing request whose `Origin` doesn't match your app (a `403`), as well as a `cross-site` or `same-site` `GET` that isn't a top-level navigation — an `<img>` on a sibling subdomain pointing at `/api/_lukk/account/export`, say (lukk-nuxt 0.12.0). You don't need to add your own CSRF layer for `/api/_lukk/**`.
 
 **What else the proxy holds the line on** (lukk-nuxt 0.12.0):
 
@@ -50,6 +50,9 @@ One credential still does: the **two-factor login challenge token**. It is issue
 - **Its responses say what they are.** JSON goes out as `application/json; charset=utf-8` (a bare JSON string or `null` keeps its JSON form), anything else — a WAF or proxy error page, say — as `text/plain; charset=utf-8` rather than `text/html` on your app's origin, and every response carries `X-Content-Type-Options: nosniff`.
 - **It bounds the request body**, which it buffers on routes reachable unauthenticated: over [`bodyLimit`](/configuration#bodylimit) (default 1 MiB) answers `413`, a chunked body `411`.
 - **Every seal expires.** Each sealed session carries a lifetime, [`session.maxAge`](/configuration#session-maxage) (default 30 days), so a session cookie copied out of a browser can't be unsealed indefinitely. Every refresh re-seals.
+- **The session cookie survives a browser restart.** It carries a `Max-Age` of `session.maxAge`, restarted on every write; before 0.12.0 it was a session cookie, so BFF users were signed out whenever the browser closed.
+- **It works under a non-root [`app.baseURL`](https://nuxt.com/docs/api/nuxt-config#baseurl).** Nitro mounts server routes under the app's base path, and the client, `useLukkFetch`'s relative app-API base and the server's logout finish now all resolve `/api/_lukk` under it (read at runtime). With `app.baseURL: '/admin/'`, earlier releases sent every sign-in, refresh and logout to the origin root.
+- **It gives up on a hung lukk.** Server-side calls to lukk time out after 15 seconds and are treated as an outage, so one stuck upstream can't hold every render and request on a session.
 - **A `401` is retried once the session is renewed.** The proxy renews server-side and answers the browser with no token, which lukk-core used to treat as "not refreshable"; the client now retries after a renewal ([`REFRESHED_WITHOUT_TOKEN`](/lukk-core#renewed-without-a-token)).
 
 **What it needs**

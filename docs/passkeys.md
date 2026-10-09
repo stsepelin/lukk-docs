@@ -178,7 +178,7 @@ When your front-end and API live on different subdomains (`app.example.com` and 
 
 ## Client (Nuxt)
 
-`useLukkPasskeys` drives the browser ceremony (`navigator.credentials`) and the base64url (de)serialization for you — you just `await` a verb.
+`useLukkPasskeys` drives the browser ceremony (`navigator.credentials`) and the base64url (de)serialization for you — you just `await` a verb. If the browser resolves the ceremony with no credential, the verb rejects with `lukk: the browser returned no passkey credential` rather than a `TypeError` from deep in the serializer (lukk-nuxt 0.12.0).
 
 > [!IMPORTANT]
 > Passkeys are phishing-resistant only because the authenticator binds each assertion to the **browser-facing origin**. Set lukk's `rp_id` to your app's registrable domain and `origins` to the exact origin in the address bar — **not** the lukk API host. In BFF mode the browser talks to your app, so the RP is your app's origin, even though the API lives elsewhere. Avoid wildcard origins. See [Split-domain (BFF) deployments](#split-domain-bff-deployments) above for setting `rp_id`/`origins` on the server.

@@ -67,7 +67,7 @@ Each refresh **rotates** the token: the response contains a brand-new refresh to
 The grace window (`grace_seconds`, default 30s) exists so concurrent refreshes don't fight. If the same token is presented twice within the window — multiple tabs, or SSR plus hydration — the second call gets a full token pair under the same session (a sibling refresh token, which the client must store like any other), rather than being treated as theft.
 
 > [!NOTE]
-> In [cookie mode](#output-modes), the refresh token is read from the `__Host-refresh` cookie automatically, so the request body can be empty.
+> In [cookie mode](#output-modes), the refresh token is read from the `__Host-refresh` cookie automatically, so the body carries no token — but send it as JSON (`Content-Type: application/json`, body `{}`): from lukk 0.7.0 a cookie-mode refresh that isn't JSON, and isn't `Sec-Fetch-Site: same-origin`/`none`, answers `415` (see [Output modes](#output-modes)).
 
 The full token lifecycle — a short-lived access token used until it nears expiry, then rotated via the long-lived refresh token:
 
@@ -116,7 +116,7 @@ The `lukk.cookie_mode` option controls where tokens are delivered. From a browse
 }
 ```
 
-**Direct browser mode (`cookie_mode => true`).** The refresh token is set in a hardened `__Host-refresh` cookie (HttpOnly, Secure, `Path=/`, no `Domain`), and only the access token is in the body. This suits a browser client talking to the API directly, with no BFF in front of it.
+**Direct browser mode (`cookie_mode => true`).** The refresh token is set in a hardened `__Host-refresh` cookie (HttpOnly, Secure, `SameSite=Strict`, `Path=/`, no `Domain`), and only the access token is in the body. This suits a browser client talking to the API directly, with no BFF in front of it.
 
 ```json
 {
@@ -125,6 +125,8 @@ The `lukk.cookie_mode` option controls where tokens are delivered. From a browse
     "expires_in": 900
 }
 ```
+
+**In cookie mode, the routes that set the refresh cookie accept only a request a form can't produce** (lukk 0.7.0). `POST /auth/login`, `/auth/register`, `/auth/refresh`, `/auth/two-factor-challenge` and `/auth/passkeys/login` answer **`415`** (`{"message": "This request must be sent as JSON."}`) unless the request has a JSON body — `Content-Type: application/json`, matched on the MIME essence — or carries `Sec-Fetch-Site: same-origin` or `none`. The reason is login CSRF: `SameSite=Strict` stops the cookie being *sent* cross-site, not being *set* — RFC 6265bis §5.7 stores a SameSite cookie from the response to a cross-site top-level navigation — so any site could auto-submit a form to `/auth/login` with the attacker's credentials (or to `/auth/refresh` with the attacker's token) and plant the attacker's session in the victim's browser. lukk-js already sends JSON. Body mode is unchanged.
 
 See [Configuration → Output Mode](/configuration#output-mode) for the config keys.
 
@@ -381,7 +383,7 @@ onMounted(async () => {
 
 #### Waiting from a plugin or a store
 
-Middleware, `setup()` and `onMounted` don't need to wait — they already run after the restore. `whenReady()` is for code that can run earlier or from anywhere: a store, or a composable a plugin calls.
+Middleware, `setup()` and `onMounted` don't need to wait — they already run after the restore. `whenReady()` is for code that can run earlier or from anywhere: a store, or a composable a plugin calls. Its promise settles even if the component that called it unmounts first: it watches in a scope of its own (lukk-nuxt 0.12.0).
 
 ```ts
 const defaultPreferences = { theme: 'system' }

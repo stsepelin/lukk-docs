@@ -2,7 +2,7 @@
 
 The signed-in counterpart to [password reset](/password-reset): a user who is already authenticated and knows their current password can rotate it without an email round-trip.
 
-`POST /auth/password` re-verifies the current password, applies your password rules to the new one, revokes every **other** session, and fires `PasswordChanged`. It's on by default and needs no configuration.
+`POST /auth/password` re-verifies the current password, applies your password rules to the new one, revokes every **other** session, and fires `PasswordChanged`. The new hash is written to the column your model names (`getAuthPasswordName()`), the one sign-in reads (lukk 0.7.0; earlier releases always wrote `password`). It's on by default and needs no configuration.
 
 ## Server (Laravel)
 
@@ -39,7 +39,7 @@ Content-Type: application/json
 | Status | Meaning |
 |---|---|
 | `200` | Changed. |
-| `422` | Wrong `current_password`, mismatched confirmation, or the new password failed `Password::defaults()`. |
+| `422` | Wrong `current_password`, mismatched confirmation, a new password that failed `Password::defaults()`, or — under bcrypt — one over 72 bytes (lukk 0.7.0; see [Password policy](/security#password-policy)). |
 | `423` | The [account lockout](/account-lockout) is holding this account. |
 | `429` | The step-up throttle is spent. |
 

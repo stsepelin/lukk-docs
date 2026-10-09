@@ -39,11 +39,29 @@ A guard is declared in two places, joined by its name — the standard Laravel p
 
 Everything the guard doesn't declare is **inherited** from the top-level config (ttls, features, cookie, …). The **top-level config is the default guard** (`config('lukk.guard')`, `api`), unchanged.
 
+A guard can harden itself — say, an admin guard with the [account lockout](/account-lockout) on and tighter login caps:
+
+```php
+'admin' => [
+    // …
+    'features' => ['lockout' => true],
+    'lockout' => ['max_attempts' => 10],
+    'rate_limits' => [
+        'login' => ['max_attempts' => 3, 'account_max_attempts' => 10],
+        'two_factor' => ['max_attempts' => 3],
+    ],
+],
+```
+
+From lukk 0.7.0 `features.lockout`, the `lockout` block, `rate_limits.login.*` and `rate_limits.two_factor.*` are read **per guard**. Earlier releases read them from the global block, so an override like this was silently ignored.
+
 Generate a per-guard secret:
 
 ```bash
 php artisan lukk:secret --guard=admin   # writes LUKK_ADMIN_SECRET to .env
 ```
+
+The guard name becomes part of an env variable name (`-` turns into `_`, letters are uppercased), so the command refuses a name that contains anything other than letters, digits, `_` and `-` (lukk 0.7.0) rather than write a line that could clobber another guard's.
 
 Bind the admin model to its guard so `startSession()` / `revokeAllSessions()` mint and scope under it:
 

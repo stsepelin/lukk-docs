@@ -104,6 +104,8 @@ lukk.deletePasskey(credentialId)
 
 Every shape is exported as a type (`TokenPair`, `TwoFactorChallenge`, `PasskeyLoginOptions`, …) and [conformance-tested](/architecture#conformance) against real lukk.
 
+`AccountExport` (the [export](/account-deletion) body) has an optional `lockouts` array — `purpose`, `attempts`, and ISO-8601 `locked_at` / `first_failed_at` / `last_failed_at` (each nullable) — for lukk releases that include the lockout counters. `PasskeySummary.last_used_at` is a number (unix seconds), not a string.
+
 `Amr` types the access token's [`amr` claim](/tokens-and-rotation#the-amr-claim): `'pwd' | 'otp' | 'pop' | 'user' | 'mfa'`, the RFC 8176 values lukk 0.7.0 emits. `'webauthn'` is gone (a breaking type change in lukk-core 0.12.0): a passkey session is `pop` + `user`, and `mfa` marks a multi-factor one.
 
 ## Errors
@@ -115,8 +117,11 @@ interface LukkError {
   status: number
   message: string
   errors?: Record<string, string[]> // Laravel validation errors (422)
+  reason?: string                    // lukk's machine-readable cause, where it names one
 }
 ```
+
+`reason` (lukk-core 0.12.0) is passed through when lukk's body carries a string one. Branch on it, never on `message`: a `423` with `reason: "confirmation_session_mismatch"` means the held step-up belongs to another session — discard it and confirm again — while a `423` without one means *earn a confirmation*.
 
 ```ts
 try {

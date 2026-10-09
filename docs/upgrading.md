@@ -73,6 +73,17 @@ impact tags. Read it (and the changelog) before bumping:
 >   [`WebAuthnCeremony`](/customization#available-contracts) must adopt the new signatures.
 > - **Passkey step-up** must meet the account's highest available level. Use the new
 >   `POST /auth/confirm-passkey/options`; a refused step-up is `422` on `credential`, not `403`.
+> - **Password step-up** is refused with `422` on `password` in a single-factor session (`amr` without
+>   `mfa`) on an account with a confirmed second factor or a user-verifying passkey — confirm with that
+>   passkey, or sign in again with the second factor. A token with no `amr` keeps the old rule.
+>   [Details](/confirmation#with-a-password).
+> - **Cookie mode: token routes require JSON.** `login`, `register`, `refresh`, `two-factor-challenge`
+>   and `passkeys/login` answer **`415`** unless the request has a JSON body or `Sec-Fetch-Site:
+>   same-origin`/`none` (login CSRF, RFC 6265bis §5.7). Send `{}` as JSON for a cookie refresh; lukk-js
+>   already does. Body mode is unchanged. [Details](/authentication#output-modes).
+> - **Under bcrypt, a new password over 72 bytes is a `422`** on register, reset and change-password. A
+>   [`registerValidation()`](/registration#customizing-the-user-s-fields) hook must add
+>   `HashablePassword::rule()` itself. See [Password policy](/security#password-policy).
 >
 > Smaller ones to check: a failed sign-in now takes at least [`login_timebox_micros`](/configuration#sign-in-timebox)
 > (500 ms) and every `forgot-password` at least `password_reset.timebox_micros` (one second) — raise
@@ -80,7 +91,11 @@ impact tags. Read it (and the changelog) before bumping:
 > sign-in clears only the per-address login bucket; the IP-independent one now decays instead. Non-account lockout subjects are stored as `idn:sha256:<digest>`. [Authenticator
 > events](/events#authenticator-events) are new — listen and notify the user. `features.logout_all`
 > is now honoured, and `features.rotation` / `reuse_detection` / `denylist` are removed (they were
-> never read). `LockoutRepository` gained `summariesForSubjects()`. See
+> never read). `LockoutRepository` gained `summariesForSubjects()`. Per-guard `features.lockout`, `lockout.*`,
+> `rate_limits.login.*` and `rate_limits.two_factor.*` are now honoured, so an extra guard that set
+> them gets them. The new [`password_reset.revoke_passkeys`](/password-reset#session-revocation) is off by
+> default. Reset and change-password now write the model's `getAuthPasswordName()` column.
+> `lukk:secret --guard` refuses a name that isn't letters, digits, `_` or `-`. See
 > [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md) for each with its impact tag.
 
 > [!WARNING]
@@ -130,6 +145,16 @@ The same release (with `lukk-core` 0.12.0) also changes:
 - **`useLukkForm` drafts** move to `lukk:form:<rememberKey>`; a draft under the old key isn't carried over.
 - **`useLukkPasskeys().confirm()`** uses lukk 0.7.0's step-up options, falling back to the login options
   on a `404` from an older lukk.
+- **The BFF session cookie now persists** for [`session.maxAge`](/configuration#session-maxage) (30 days),
+  restarting on every write. It used to carry no `Max-Age`, so BFF users were signed out whenever the
+  browser closed; now they stay signed in like direct-mode users. A cleared session's cookie is deleted.
+- **The app-API proxy keeps CORS your app's own:** it drops the upstream's `Access-Control-*` and
+  hop-by-hop headers and blanks `Origin` upstream. The **BFF auth proxy refuses a `cross-site` or
+  `same-site` GET that isn't a top-level navigation** (an `<img>` pointing at it, say); links in emails
+  still work.
+- **Packaging:** `LUKK_BFF_PREFIX` and `LUKK_SESSION_COOKIE` import as values again
+  (`import { LUKK_BFF_PREFIX } from 'lukk-nuxt'` failed with TS1362), `h3` is a declared dependency,
+  and the internal `refreshOnce` helper is no longer auto-imported into your server code.
 - **`useLukkPasskeys().login()`** resolves to a `LoginResult`. When lukk 0.7.0 answers a single-factor
   passkey with a two-factor challenge, `pendingTwoFactor` turns true and no user is loaded: show the same
   code form as after a password sign-in.
