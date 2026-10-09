@@ -70,13 +70,16 @@ One credential still does: the **two-factor login challenge token**. It is issue
 
 ### A slow rotation
 
-lukk commits a rotation the moment it receives the refresh, so a rotation the BFF stops waiting for is not a failed one — it is a token pair with nobody left to receive it, while the browser's sealed session still holds the refresh token it consumed. Replayed later, past lukk's [grace window](/tokens-and-rotation#the-grace-window), that token is exactly what reuse detection answers with a family revoke (RFC 9700 §4.14.2). So the BFF keeps the result (lukk-nuxt 0.12.0):
+lukk commits a rotation the moment it receives the refresh, so a rotation the BFF stops waiting for is not a failed one — it is a token pair with nobody left to receive it, while the browser's sealed session still holds the refresh token it consumed. Replayed later, past lukk's [grace window](/tokens-and-rotation#the-grace-window), that token is exactly what reuse detection answers with a family revoke (RFC 9700 §4.14.2). The same goes for a page's burst of requests still carrying the old cookie after one of them has rotated it. So the BFF keeps a **rotation journal** per session (lukk-nuxt 0.12.0):
 
-- **Held for its first taker.** A rotation that lands after every caller waiting on it gave up is kept for up to **ten minutes**. The session's next refresh — from the auth proxy, the app-API proxy or an SSR render — adopts and seals it instead of replaying the consumed token, but only a request still presenting *that* token. Its `expires_in` is what is left of the access token, not what it was when minted.
-- **Then 30 seconds for stragglers.** Once taken, it stays adoptable for 30 s more, for the burst of requests that were already on their way with the old cookie (a page coming back fires several at once). If the taker refreshes the token it was handed in that window — its access token may already have expired while the rotation was held — the hold follows that rotation, so a straggler receives the taker's *new* pair rather than re-sealing the one it just spent. The window is never extended.
-- **Dropped when it can't help.** It is let go at once when the session presents any refresh token outside its own chain — an old cookie surfacing later then reaches lukk, whose reuse detection answers it — and when the session ends: a logout or a sign-in never has it re-sealed, and nothing is forwarded for a session that ended.
+- **Every rotation is linked.** Each rotation that lands with a pair is recorded as a link from the refresh token it consumed to the pair it produced, whether or not anyone was still waiting for it. Following the links from any recorded token reaches the chain's **head** — the newest pair.
+- **A consumed token adopts the head.** A request still presenting a token with a live link — from the auth proxy's `/refresh` or 401 retry, the app-API proxy, or an SSR render — is handed the head and seals it, instead of replaying the spent token to lukk. If the head's own token is being rotated at that moment, the request waits for that rotation and is handed what it produced, never a token the session is spending.
+- **The head's own token goes to lukk**, and the pair that comes back is linked in turn. **Any other token** — one the journal never saw — means the session has moved on: the journal is dropped and the token is lukk's to rule on, so an old cookie surfacing later meets lukk's reuse detection.
+- **Each link lives on its own timer.** One whose rotation no caller received waits up to **ten minutes** for its first taker. Once its pair has reached the session, it lasts **30 seconds**, for the requests already on their way with the old cookie (a page coming back fires several at once). For a rotation a caller received, those 30 s count from when the refresh *left* — lukk rotates on receipt, so that is when lukk's own grace window starts too; otherwise from the moment a request adopts through the link or the session presents the pair it produced. Adopting takes every link on the way to the head, so no link outlives the links after it and an old cookie is never handed a pair rotated since. Taking one link never extends another.
+- **`expires_in` counts from minting.** A pair handed out from the journal — and one a caller receives directly from a slow refresh — carries what is left of its access token, counted from when the refresh left, not lukk's figure as sent.
+- **Dropped when it can't help.** Besides a token outside it, the journal goes when lukk refuses one of its tokens outright (`401`/`403`) and when the session is logged out or replaced, so a logout or a sign-in never has it re-sealed. A throttle or an outage keeps it. It holds at most **16 links** per session, the oldest going first.
 - **A refresh in flight is joined only by a request presenting the token it is rotating.** One presenting another token is lukk's to rule on; joining would hand it a pair its own token never earned.
-- **The client retries once.** `/api/_lukk/refresh` answers a caller that stopped waiting with `503` and `Retry-After: 5`. lukk-nuxt's client reads it from [`LukkError.retryAfter`](/lukk-core#errors), waits that long (at most ten seconds), and asks once more — joining the rotation if it is still out, adopting it if it has landed — instead of leaving the session until the user's next action. A `logout()` started meanwhile wakes the wait, and the retry stands down rather than renewing the session being ended.
+- **The client retries once.** `/api/_lukk/refresh` answers a caller that stopped waiting with `503` and `Retry-After: 5`. lukk-nuxt's client reads it from [`LukkError.retryAfter`](/lukk-core#errors), waits that long (at most ten seconds), and asks once more — joining the rotation if it is still out, adopting from the journal if it has landed — instead of leaving the session until the user's next action. A `logout()` started meanwhile wakes the wait, and the retry stands down rather than renewing the session being ended.
 
 ```mermaid
 sequenceDiagram
@@ -88,13 +91,23 @@ sequenceDiagram
     Note over P: 15 s pass, the caller gives up
     P-->>B: 503, Retry-After: 5
     L-->>P: pair B (A consumed)
-    Note over P: held for the next request presenting A
+    Note over P: journal links A to B, ten minutes for a first taker
     B->>P: POST /api/_lukk/refresh (token A)
-    Note over P: adopts pair B, no replay of A
+    Note over P: A has a live link, adopts head B, no replay of A
     P-->>B: renewed, session re-sealed with B
+    Note over P: link A now lasts 30 s for stragglers
+    B->>P: POST /api/_lukk/refresh (token A, a straggler)
+    Note over P: adopts head B again
+    P-->>B: renewed, sealed with B
+    B->>P: POST /api/_lukk/refresh (token B, the head)
+    P->>L: refresh B
+    L-->>P: pair C (B consumed)
+    Note over P: journal links B to C, so A now leads to C
 ```
 
-Two limits are accepted. **The memory is per process**: behind a multi-instance BFF without sticky sessions, a next request that reaches another instance replays the old token, and only lukk's grace window (`grace_seconds`, 30 s by default) keeps that from revoking the session — use sticky sessions there, or raise the grace window if your lukk can be slow to rotate. And **if the first taker's response is lost** (a navigation aborts it), the browser keeps the consumed token, and its next refresh after the 30 s revokes the session — the same exposure as any rotation whose response is lost; holding longer would widen the window in which an old cookie elsewhere is answered with a live pair.
+**A deliberate deviation.** A replay the journal answers never reaches lukk, so lukk's [reuse detection](/tokens-and-rotation#reuse-detection) — and its [`RefreshFamilyForked`](/events#refreshfamilyforked) event — does not see it. RFC 9700 §4.14.2 treats a replayed consumed token as the sign of a stolen one; inside the windows above the BFF reads it as this browser catching up. Outside them it reaches lukk as before. Like lukk's own [grace window](/tokens-and-rotation#a-deliberate-deviation-from-the-spec), it is bounded in time, to the windows above: inside them, an old copy of the sealed session cookie reaching the same server process is answered with the session's live pair rather than tripping a family revoke.
+
+Two limits are accepted. **The journal is per process**, and [`session.sharedStore`](/configuration#session-sharedstore) does not share it: behind a multi-instance BFF without sticky sessions, a next request that reaches another instance replays the old token, and only lukk's grace window (`grace_seconds`, 30 s by default) keeps that from revoking the session — use sticky sessions there, or raise the grace window if your lukk can be slow to rotate. And **if the response carrying a pair is lost** (a navigation aborts it) and its link's window closes first, the browser's replay of the consumed token revokes the session — the same exposure as any rotation whose response is lost; longer windows would widen the time in which an old cookie elsewhere is answered with a live pair.
 
 ### SSR hydration
 

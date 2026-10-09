@@ -136,7 +136,7 @@ lukk `0.7.0`'s smaller changes, each with what to check:
 | [Account erasure](/account-deletion#what-erasure-actually-does) opens a transaction on every connection it writes to — the default one, the password broker's and the refresh-token store's — and `auth.passwords.<broker>.connection` may be an enum, backed or pure. | Low | None. With a `useRefreshTokenModel` model on another connection, a failed erasure used to keep the user and lose their credentials — upgrade. |
 | Access tokens whose `exp`, `iat` or `nbf` is not a timestamp between the epoch and the end of year 9999 are [rejected](/tokens-and-rotation#claim-validation); fractions and numeric strings stay valid. Challenge tokens take the same upper bound on `exp`. | Low unless a co-issuer mints tokens | Check that a co-issuer stamps real Unix times — a token it used to get through, only to `500` later, is now a `401`. |
 | A [recovery code](/two-factor-authentication#recovery-codes) stored under a hasher the app has since left is no match, not a `500`. | Low | After switching hashers with `verify` on, have users regenerate their codes. |
-| Registration requires a string password under every rule set, and its safety net (string, NUL, 72-byte) also runs for a rebound `RegisterRequest` subclass that overrides `rules()`. | Low | None — a JSON number or array password is a `422` on `password`. |
+| Registration, [reset](/password-reset) and [change-password](/change-password) require the new password to be a string under every rule set, and registration's safety net (string, NUL, 72-byte) also runs for a rebound `RegisterRequest` subclass that overrides `rules()`. | Low | None — a JSON number or array password is a `422` on `password`. |
 | An `auth_time` may be fractional (floored) or a numeric string; a negative one is refused; [`confirm.mfa_max_age`](/configuration#confirmation) may be a float, so a "never" past the integer range no longer `500`s. | Low | None. |
 
 See [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md) for the full text of each.
@@ -217,12 +217,15 @@ The same release (with `lukk-core` 0.12.0) also changes:
   grace, would revoke the whole family (RFC 9700 §4.14.2). No request waits on a slow refresh for more
   than 15 s either: `/api/_lukk/refresh` then answers `503` with `Retry-After: 5`, keeping the session
   (lukk-nuxt's client retries once after it, standing down for a logout); a proxied or app-API call goes
-  ahead with the old access token; an SSR render leaves the session to the client. A rotation that lands
-  with nobody waiting is [held](/transport-modes#a-slow-rotation) — ten minutes for its first taker, then
-  30 s for stragglers — and adopted by the session's next refresh presenting the consumed token. **That
-  memory is per process**: behind a multi-instance BFF without sticky sessions, use sticky sessions or
-  raise lukk's grace window if lukk can be slow to rotate. A refresh that never settles stops being
-  shared after five minutes.
+  ahead with the old access token; an SSR render leaves the session to the client. Every rotation is
+  [journalled](/transport-modes#a-slow-rotation) per session, from the token it consumed to the pair it
+  produced, and a request still presenting a consumed token is handed the chain's newest pair instead of
+  replaying it — ten minutes for a link nobody received, 30 s once its pair has reached the session. Those
+  replays never reach lukk, so its reuse detection and `RefreshFamilyForked` don't see them (a bounded
+  deviation from RFC 9700 §4.14.2). An `expires_in` handed out after a slow refresh now counts from when
+  lukk minted the token. **The journal is per process**: behind a multi-instance BFF without sticky
+  sessions, use sticky sessions or raise lukk's grace window if lukk can be slow to rotate. A refresh that
+  never settles stops being shared after five minutes.
 - **`session.maxAge` must be a positive whole number of seconds.** Anything else fails the build (`0`
   used to seal sessions that never expire), and a runtime override that isn't one makes every session
   write throw.

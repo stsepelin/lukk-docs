@@ -473,6 +473,8 @@ Use a strongly consistent driver that expires keys itself — Redis, or Upstash 
 
 Each store call is capped at 300 ms, and after a failure the store is left alone for 30 seconds — a slow or unreachable store falls back to the per-process record instead of holding up sign-ins, logouts and page loads. lukk-nuxt reports that once per server process, and warns at startup when the mount name matches no configured `nitro.storage` mount.
 
+`sharedStore` holds only that record. The BFF's [rotation journal](/transport-modes#a-slow-rotation) stays per process whatever you set here — use sticky sessions behind a load balancer.
+
 With Redis, also tell the client not to queue and retry commands while the connection is down, so each call fails fast instead of running into that cap every time. (The client still logs its own reconnect attempts, `[ioredis] Unhandled error event`, for as long as the outage lasts.)
 
 ```ts
