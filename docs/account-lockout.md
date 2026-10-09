@@ -123,7 +123,7 @@ The lockout check runs **before** the rate limiter, so a locked account gets the
 
 Four things clear a counter:
 
-- **A successful authentication.** "Consecutive" is the whole point — any success ends the run and resets the count to zero. A successful **login** additionally clears a `confirm` lock: it proves the same password, and it's the self-service escape when someone locked step-up with a stolen token (they can't log in without the password, so this hands them nothing).
+- **A successful authentication.** "Consecutive" is the whole point — any success ends the run and resets the count to zero. A successful **login** additionally clears a `confirm` lock: it proves the same password, and it's the self-service escape when someone locked step-up with a stolen token (they can't log in without the password, so this hands them nothing). A passkey clears it only on a step-up that passed every check, or a sign-in that granted a session on a [multi-factor assertion](/passkeys#when-a-passkey-counts-as-multi-factor) (lukk 0.7.0) — a presence-only key proves possession alone, and letting it clear the count would make password guesses with a stolen token unlimited.
 - **A password reset.** [Completing a reset](/password-reset) releases the `login` **and** `confirm` locks, keyed off the *resolved* user — after a reset, failures counted against the old password are meaningless. Without this, an attacker who locked an account could keep it locked even after the owner did the one thing that should restore access — the owner would be stuck with no path left but a support ticket.
 - **`release_after` elapsing**, when you've set it. This one is lazy and read-only: the lock simply *reports* unlocked, and the row is reset by the next failure or dropped by [pruning](#pruning). Nothing is written on a read path (that would break on a replica), so **no `AccountReleased` fires** for an expiry.
 - **The console command**, for your support team:
@@ -175,7 +175,7 @@ Event::listen(function (AccountLocked $event) {
 
 ## Swapping the store
 
-Storage sits behind `Lukk\Contracts\LockoutRepository`, like every other seam in the package. The default `DatabaseLockoutRepository` uses a transaction with a row lock to count, so concurrent failed attempts can't race past the cap. If you rebind it, **preserve that** — a non-atomic implementation lets a burst of parallel requests blow straight through `max_attempts`.
+Storage sits behind `Lukk\Contracts\LockoutRepository`, like every other seam in the package. The default `DatabaseLockoutRepository` uses a transaction with a row lock to count, so concurrent failed attempts can't race past the cap. If you rebind it, **preserve that** — a non-atomic implementation lets a burst of parallel requests blow straight through `max_attempts`. Account [erasure and export](/account-deletion) call `forget()` and `summariesForSubjects()` on whatever is bound (lukk 0.7.0; they used to be skipped unless a `lukk_lockouts` table existed), so answer `0` and `[]` for nothing stored rather than throwing.
 
 ```php
 // AppServiceProvider::register()

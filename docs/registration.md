@@ -98,7 +98,9 @@ Lukk::registerValidation(fn ($request) => [
 
 The default rules (`RegisterRequest`) are `name` (required), the identifier (a valid, **unique** address when it is `email`), and `password` (`confirmed`, at most 255 characters, meeting `Password::defaults()`). Tune password strength app-wide with `Password::defaults()` — see [Password policy](/security#password-policy).
 
-A hook **replaces** the default rules, but lukk 0.7.0 still applies two password checks after yours: the password must be a string (an array used to `500` in the default create), and under bcrypt it may be at most 72 bytes — a `422` either way. bcrypt reads only the first 72 bytes, so a longer password would be stored truncated and any string sharing that prefix would sign in (NIST SP 800-63B-4 §3.1.1.2); with Laravel's `hashing.bcrypt.limit` on it was a `500` instead. Other drivers pass the length check untouched. Listing `HashablePassword::rule()` yourself, as above, is harmless.
+A `registerValidation()` hook **replaces** the default rules, but while lukk's own create runs, lukk 0.7.0 still applies three password checks after yours: the password must be a string (an array used to `500` in the default create), contain no NUL byte (`Hash::make` throws on one — a `500` on a public route), and under bcrypt be at most 72 bytes — a `422` each. bcrypt reads only the first 72 bytes, so a longer password would be stored truncated and any string sharing that prefix would sign in (NIST SP 800-63B-4 §3.1.1.2); with Laravel's `hashing.bcrypt.limit` on it was a `500` instead. Other drivers pass the length check untouched.
+
+**With a `registerUsing()` hook, those checks are yours.** lukk adds them to guard its own create; your hook stores the password its own way, so lukk stays out of it. List `HashablePassword::rule()` in your rules, as above, if you hash with bcrypt — otherwise a password over 72 bytes is stored truncated, and from lukk 0.7.0 its owner can't sign in with it until they [reset](/security#password-policy).
 
 ### Username instead of email
 

@@ -39,7 +39,7 @@ Content-Type: application/json
 | Status | Meaning |
 |---|---|
 | `200` | Changed. |
-| `422` | Wrong `current_password`, mismatched confirmation, a new password that failed `Password::defaults()`, or — under bcrypt — one over 72 bytes (lukk 0.7.0; see [Password policy](/security#password-policy)). |
+| `422` | Wrong `current_password`, mismatched confirmation, a new password that failed `Password::defaults()`, or — under bcrypt — one over 72 bytes (lukk 0.7.0; see [Password policy](/security#password-policy)). A `current_password` over 72 bytes against a bcrypt hash gets its own message telling the user to reset: earlier releases stored it truncated, so it can't be checked in full. |
 | `423` | The [account lockout](/account-lockout) is holding this account. |
 | `429` | The step-up throttle is spent. |
 

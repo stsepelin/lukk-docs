@@ -151,7 +151,7 @@ The cryptographic and revocation seams are contracts too. Rebind `Contracts\Toke
 | `RegisterResponse` | built-in | Shapes the [registration](/registration) response (token pair, challenge, or `201`). |
 | `TwoFactorChallengeResponse` | built-in | Shapes the 2FA login challenge. |
 | `EmailVerificationResponse` | built-in | Answers a verified link: `204` for JSON, a redirect to `frontend_url` for a browser. |
-| `LockoutRepository` | `DatabaseLockoutRepository` | Stores the [account-lockout](/account-lockout) counters; also `forget()` for erasure and `summariesForSubjects()` for the export. |
+| `LockoutRepository` | `DatabaseLockoutRepository` | Stores the [account-lockout](/account-lockout) counters; also `forget()` for erasure and `summariesForSubjects()` for the export — called on whatever is bound, so answer `0` / `[]` for nothing stored. |
 | `TwoFactorProvider` | `Google2FaTotpProvider` | Generates and verifies TOTP codes. |
 | `WebAuthnCeremony` | `SpomkyWebAuthnCeremony` | Performs WebAuthn registration/assertion, and reports what an assertion proved. |
 | `PasskeyRepository` | `DatabasePasskeyRepository` | Persists passkey credentials. |

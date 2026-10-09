@@ -82,6 +82,8 @@ In the refused case the session confirms with a passkey that verifies the user, 
 
 An enrolled TOTP counts only where the guard enforces two-factor: with `features.two_factor` off, login never asks for the code, so no session there could carry `mfa` and the step-up would be locked away for good. The refusal comes before the password is checked, so it spends no lockout attempt and says nothing about the password. `Lukk::actingAs()`, which presents no token, keeps the old rule.
 
+A password over 72 bytes against a bcrypt hash is answered with its own `422` on `password` — "Reset your password to continue" — after the check has run, since bcrypt could verify only its first 72 bytes and earlier releases stored it truncated. See [Password policy](/security#password-policy).
+
 #### With a passkey
 
 If [passkeys](/passkeys) are enabled, a passkey assertion earns the same token, so passkey-only users can step up too. Get the ceremony from the authenticated options route, then post the assertion:
@@ -196,7 +198,7 @@ await confirmPassword(currentPassword)
 // confirmed.value === true
 ```
 
-A wrong password throws a typed [`LukkError`](/lukk-core#errors) (`422`). So does a password step-up [refused for the account's level](#with-a-password) — a single-factor session on an account with a second factor — also a `422` on `password`; offer [passkey confirmation](#confirming-with-a-passkey) there, or a fresh sign-in with the second factor. Call `clear()` to drop the confirmation early (it also clears on [logout](/authentication#logging-out-1)).
+A wrong password throws a typed [`LukkError`](/lukk-core#errors) (`422`). So does a password step-up [refused for the account's level](#with-a-password) — a single-factor session on an account with a second factor — also a `422` on `password`; offer [passkey confirmation](#confirming-with-a-passkey) there, or a fresh sign-in with the second factor. A `422` telling the user to reset means their password is over 72 bytes under bcrypt — send them to [password reset](/password-reset). Call `clear()` to drop the confirmation early (it also clears on [logout](/authentication#logging-out-1)).
 
 In BFF mode, a confirmation can also reject with **`409`** when the session that asked for it was replaced by a sign-in (or ended by a logout, perhaps in another tab) while the request was out. The confirmation belonged to that session, so the proxy doesn't store it; re-confirm once the page shows the current session.
 
@@ -248,7 +250,7 @@ const password = ref('')
 </template>
 ```
 
-`withConfirmation` drops a stale confirmation on the `423`, so it always re-prompts when the server genuinely requires one (rather than trusting an expired client flag). `cancel()` rejects the pending action. A pending action is also cancelled when its session ends — on `logout()` and on every sign-in (lukk-nuxt) — so a confirmation earned later, perhaps by another account on the same tab, can never run the old action unasked.
+`withConfirmation` drops a stale confirmation on the `423`, so it always re-prompts when the server genuinely requires one (rather than trusting an expired client flag). `cancel()` rejects the pending action. A `403` from the confirm call means the token can never earn a step-up — a [pinned](/abilities) machine token without `lukk.account` — so it ends the wait instead of leaving the modal open: the pending action rejects with that `403`, not "confirmation cancelled". That holds across instances (lukk-nuxt 0.12.0): the modal calling `confirmPassword()` and the page waiting in `withConfirmation()` are usually two `useLukkConfirmation()` calls, and the error is now held per app rather than per instance, so the page sees it. A pending action is also cancelled when its session ends — on `logout()` and on every sign-in (lukk-nuxt) — so a confirmation earned later, perhaps by another account on the same tab, can never run the old action unasked.
 
 #### Per-page (a section)
 

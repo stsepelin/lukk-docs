@@ -77,9 +77,15 @@ lukk.login(credentials)                 // → TokenPair | TwoFactorChallenge
 lukk.twoFactorChallenge({ challenge_token, code | recovery_code })
 lukk.refreshTokens(refreshToken?)       // direct mode passes the token; cookie mode omits it
 lukk.restore()                          // silent refresh; null when there's no session
-lukk.logout({ retry? })                 // retry: false skips refresh-and-retry on a 401 (renew it yourself)
+lukk.logout({ retry?, refreshToken? }) // retry: false skips refresh-and-retry on a 401 (renew it yourself)
 lukk.revokeAllSessions()
 lukk.revokeOtherSessions()
+
+// account (each resolves to LukkStatus — { status: string })
+lukk.forgotPassword(email)              // → { status: 'password-reset-link-sent' }
+lukk.resetPassword({ token, email, password, password_confirmation })
+lukk.changePassword({ current_password, password, password_confirmation })
+lukk.sendEmailVerification()            // → { status: 'verification-link-sent' } (a 202)
 
 // step-up confirmation
 lukk.confirmPassword(password)          // → { confirmation_token }
@@ -103,6 +109,10 @@ lukk.deletePasskey(credentialId)
 ```
 
 Every shape is exported as a type (`TokenPair`, `TwoFactorChallenge`, `PasskeyLoginOptions`, …) and [conformance-tested](/architecture#conformance) against real lukk.
+
+**`logout({ refreshToken })`** (lukk-core 0.12.0) presents the session's refresh token in the body. lukk ends a session by the refresh token the client holds — the RFC 7009 shape — so a [body-mode](/configuration#output-mode) binding whose access token has expired can log out without spending a rotation on a fresh bearer first, or while refreshing is throttled or failing. Cookie mode sends lukk's cookie instead, so leave it out there. Older lukk releases ignore it and use the bearer.
+
+**`LukkStatus`** (lukk-core 0.12.0) is the acknowledgement lukk answers the fire-and-forget account calls with: `password-reset-link-sent`, `password-reset`, `password-changed` and `verification-link-sent`. They used to resolve to `void`. `status` is typed `string`, so a lukk release adding a value is not a type error.
 
 `AccountExport` (the [export](/account-deletion) body) has an optional `lockouts` array — `purpose`, `attempts`, and ISO-8601 `locked_at` / `first_failed_at` / `last_failed_at` (each nullable) — for lukk releases that include the lockout counters. `PasskeySummary.last_used_at` is a number (unix seconds), not a string.
 

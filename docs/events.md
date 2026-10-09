@@ -79,7 +79,7 @@ Event::listen(function (PasskeyCloneDetected $event) {
 
 The event carries `$userId` and `$credentialId`. A **zero** counter is never flagged — synced passkeys always report `0`.
 
-From lukk 0.7.0 it also fires for a non-zero counter that **did not advance** because another assertion got there first. Two concurrent assertions presenting the same counter used to both pass, since each read the stored value before either wrote it; the update is now forward-only and reports whether it won, and the loser is refused as a clone (WebAuthn L3 §6.1.1). The assertion is refused in either case.
+From lukk 0.7.0 it also fires for a non-zero counter that **did not advance** because another assertion got there first. Two concurrent assertions presenting the same counter used to both pass, since each read the stored value before either wrote it; the update is now forward-only and reports whether it won, and the loser is refused as a clone (WebAuthn L3 §6.1.1). The assertion is refused in either case. A credential deleted mid-ceremony, whose update also writes nothing, is refused without the event — only a row that is still there lost a race worth an alarm.
 
 ### AccountLocked / AccountReleased
 

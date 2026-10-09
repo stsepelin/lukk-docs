@@ -161,7 +161,7 @@ Everything lukk owns is still erased — only the row's fate changes.
 }
 ```
 
-`lockouts` arrives with lukk 0.7.0: the [account-lockout](/account-lockout) counters held against the account, which erasure also deletes. It reports the purpose, the attempt count and ISO-8601 timestamps (`locked_at` is `null` while the counter is not locked) — never lukk's internal subject keys. A custom `LockoutRepository` must implement `summariesForSubjects()` to supply it.
+`lockouts` arrives with lukk 0.7.0: the [account-lockout](/account-lockout) counters held against the account, which erasure also deletes. It reports the purpose, the attempt count and ISO-8601 timestamps (`locked_at` is `null` while the counter is not locked) — never lukk's internal subject keys. A custom `LockoutRepository` must implement `summariesForSubjects()` to supply it — and, from lukk 0.7.0, it is called (with `forget()` on erasure) whether or not a `lukk_lockouts` table exists, so a store kept elsewhere no longer leaves a deleted account's counters behind or out of the export.
 
 > [!WARNING]
 > **This is the auth slice, not a complete Art. 15 response.** lukk knows about sessions, passkeys,
