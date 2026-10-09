@@ -91,7 +91,7 @@ This is built in. Generate a signing keypair on the auth service:
 php artisan lukk:keygen
 ```
 
-Set the algorithm and point lukk at the keypair:
+It prints the PEM pair and the `.env` lines to set; it writes no file and touches no `.env`, so store the keys yourself (a secrets manager, or files outside the web root). Set the algorithm and point lukk at the keypair:
 
 ```dotenv
 LUKK_ALGORITHM=RS256          # or ES256

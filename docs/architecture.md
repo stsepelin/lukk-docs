@@ -16,14 +16,14 @@ The architecture mirrors Sanctum:
 
 | Layer | Responsibility |
 |---|---|
-| **Controllers** | Thin — run an Action, return a Response contract. |
+| **Controllers** | Thin — run an Action, return the response. |
 | **Actions** | Single-purpose orchestration; the policy lives here. |
 | **Contracts** | The swap seams — issuer, verifier, repository, denylist, responses. |
 | **Concrete implementations** | The defaults bound to each contract. |
 
 This separation is what makes lukk customizable without edits (see [Customization](/customization)). Critically, the rotation **policy** (in `Actions\RotateRefreshToken`) is separate from token **storage** (behind `Contracts\RefreshTokenRepository`), so you can swap the database for Redis without touching the security-critical logic.
 
-Controllers are resource-oriented — one resource (or single-action `__invoke`) controller per concern, using resourceful verbs (`store`/`destroy`/`index`), never one god-controller — and stay thin: run an Action, return a Response contract.
+Controllers are resource-oriented — one resource (or single-action `__invoke`) controller per concern, using resourceful verbs (`store`/`destroy`/`index`), never one god-controller — and stay thin: run an Action, return the response. A controller returns a **Response contract** only where the body is a genuine swap seam — it carries a token pair or a user resource, or it branches on the request (`EmailVerificationResponse`: `204` for JSON, a redirect for a browser). A fixed acknowledgement or a data read (`{"status": "password-reset"}`, the passkey list, JWKS) returns plain JSON or `noContent()` directly; there is nothing for you to swap.
 
 ### The customization hub
 

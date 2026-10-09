@@ -135,7 +135,7 @@ Generate one with `openssl rand -base64 32`. It's the BFF equivalent of `APP_KEY
 
 ### What the module registers
 
-- the composables (`useLukkAuth`, `useLukkTwoFactor`, `useLukkConfirmation`, `useLukkPasskeys`, `useLukkEmailVerification`), auto-imported;
+- every composable, auto-imported: `useLukkAuth`, `useLukkFetch`, `useLukkForm`, `useLukkTwoFactor`, `useLukkConfirmation`, `useLukkPasskeys`, `useLukkEmailVerification`, `useLukkPasswordReset`, `useLukkChangePassword`, `useLukkAccount`, `useLukkAbilities`;
 - the route middleware `lukk-auth`, `lukk-guest`, `lukk-verified`, `lukk-confirmed`;
 - a client plugin that restores an existing session on load;
 - in `bff` mode, the Nitro proxy at `/api/_lukk/**`.

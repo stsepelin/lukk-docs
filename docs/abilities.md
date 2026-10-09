@@ -121,12 +121,15 @@ Pinning requires the `scope` column — see [Upgrading](https://github.com/stsep
 
 ## lukk's own routes
 
-A token pinned to `['ci.deploy']` is refused by every gated route in *your* application — but lukk's own routes were gated on authentication alone, so it could still log the account out everywhere. Two of lukk's abilities close that:
+A token pinned to `['ci.deploy']` is refused by every gated route in *your* application — but lukk's own routes were gated on authentication alone, so it could still log the account out everywhere. Three of lukk's abilities close that:
 
 | Ability | Required by | For |
 |---|---|---|
 | `lukk.sessions` | `DELETE /auth/sessions`, `DELETE /auth/sessions/others` | revoking **other** sessions |
-| `lukk.account` | `POST /auth/confirm-password`, `POST /auth/confirm-passkey`, `POST /auth/password` | step-up, and changing the password |
+| `lukk.account` | `POST /auth/confirm-password`, `POST /auth/confirm-passkey`, `POST /auth/confirm-passkey/options`, `POST /auth/password`, `GET /auth/two-factor/recovery-codes`, `GET /auth/passkeys` | step-up, changing the password, and reading the account's authenticators |
+| `lukk.account.delete` | `DELETE /auth/account`, `GET /auth/account/export` | [erasure and export](/account-deletion) — deliberately **not** covered by `lukk.account` |
+
+The two-factor and passkey routes are mounted only when their feature is on.
 
 Both step-up routes are gated, not just the password one — `confirm-passkey` is the other way in, and gating only the password path would make the gate decorative for any account with a passkey enrolled.
 
@@ -138,7 +141,7 @@ Both step-up routes are gated, not just the password one — `confirm-passkey` i
 $pair = app(StartSession::class)($user->getKey(), [], ['ci.deploy', Abilities::SESSIONS]);
 ```
 
-`POST /auth/logout`, `POST /auth/refresh` and `POST /auth/session/claim` are never gated: they act on the calling session alone and grant nothing, and a pinned token has to be able to end, renew and claim itself. Set `features.gate_auth_routes` to `false` to switch the whole thing off.
+`POST /auth/logout`, `POST /auth/refresh` and `POST /auth/session/claim` are never gated: they act on the calling session alone and grant nothing, and a pinned token has to be able to end, renew and claim itself. Set `features.gate_auth_routes` to `false` to switch off the `lukk.sessions` and `lukk.account` gates — but **not** the `lukk.account.delete` one: erasure and export didn't exist before abilities, so switching it off would hand a narrow machine token an irreversible new power rather than restore an old one ([why](/account-deletion)).
 
 ## Responses
 

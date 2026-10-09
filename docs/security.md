@@ -31,6 +31,21 @@ This is the security reference for reviewers and the security-minded: the invari
 - **Fail-safe error codes.** Invalid, expired, revoked, reused and unclaimed refresh tokens all return `401`, not 500, without leaking which of those it was. Expired or not-yet-valid access tokens — and tokens whose `sub` user was deleted — are rejected at the guard.
 - **Logout ends the session with either credential the client holds.** From lukk 0.7.0 `POST /auth/logout` is no longer behind `auth:{guard}`: a valid access token *or* the client's refresh token ends the session, so the most ordinary client state there is — an idle tab whose 15-minute access token has lapsed — can still log out instead of getting a `401` and leaving a refresh cookie valid for its whole TTL (RFC 7009 §2.1–2.2, ASVS 5.0 V7.4.1). An **expired** access token alone ends nothing, whatever its signature: honouring one would make every token that ever reached a log or a crash report a durable capability to end that session. The refresh cookie is honoured — and cleared — only on a request shape a cross-site form cannot produce: `Content-Type: application/json` (not CORS-safelisted, so a cross-origin page must pass a preflight your CORS policy governs, and matched on the MIME essence so `text/plain; x=/json` doesn't slip through), or `Sec-Fetch-Site: same-origin`/`none`. Not `same-site` — that is the sibling-subdomain attacker, whom `SameSite=Strict` does not stop. A throttled refresh-token lookup answers `429` with `Retry-After` and leaves the cookie in place, because the session is still live and the client must retry.
 
+## Password policy
+
+lukk validates every new password (register, reset, change) as `required`, `confirmed`, at most 255 characters, free of NUL bytes, and meeting `Password::defaults()`. It imposes no composition rules of its own — that is your application's call, made once in `Password::defaults()`:
+
+```php
+// AppServiceProvider::boot()
+use Illuminate\Validation\Rules\Password;
+
+Password::defaults(fn () => Password::min(15)->uncompromised());
+```
+
+- **Length.** NIST SP 800-63B-4 §3.1.1.2 asks for at least **15 characters** when the password is the only factor, and allows 8 when it is used with a second one. With [two-factor](/two-factor-authentication) optional, most accounts are single-factor — set 15.
+- **Blocklist.** The same section requires checking new passwords against known-compromised values. `uncompromised()` does that against Have I Been Pwned's k-anonymity API (only a hash prefix leaves your server).
+- **No truncation.** bcrypt reads only the first 72 bytes, so a longer password would be stored truncated and any string sharing that prefix would sign in — §3.1.1.2 requires verifying the whole password. From lukk 0.7.0, under bcrypt a new password over **72 bytes** is refused with a `422` (bytes, not characters: 36 two-byte characters fill it). Prefer **argon2id** (`HASH_DRIVER=argon2id`), which has no such limit, if long passphrases matter to you. A [`Lukk::registerValidation()`](/registration#customizing-the-user-s-fields) hook replaces the default rules, so include `Lukk\Support\HashablePassword::rule()` in it.
+
 ## Transport hardening (client)
 
 Where the tokens physically live is a [transport-mode](/transport-modes) choice, and each mode has its own containment.
@@ -111,8 +126,6 @@ These behaviours are accepted trade-offs rather than gaps. All are bounded, and 
 **A logout that stands down still resolves successfully.** A `logout()` whose work outlives the page leaves a note, and the page load that finds it stands down instead of sending, if there is positive evidence of a sign-in on this app *since that logout was asked for* — the tab signed in again, or another tab did. Standing down is the right answer (the session the note was for is gone, and sending would end the newer one), but the original `logout()` call had already resolved without throwing, so a `.then()` that shows "signed out" was right about the old session and says nothing about the new one. Read the reactive state (`loggedIn`, `user`), not the promise, if what you want to show is whether *this browser* is signed in now.
 
 **A sign-in that arrives with no session cookie can be read as signed out, once.** In BFF mode a sign-in records that it replaced the session it arrived with — which is how an in-flight request that is still finishing an older logout knows not to answer "signed out" to a browser that has since signed in again. A sign-in whose request carries *no* session cookie (the logout that preceded it had already cleared it) has nothing to record: the old session's key is not in that request, and the server has no other way to name it. A page load still in flight for the old session can therefore set the ten-second signed-out marker on a browser that now holds a new one, and that one page renders signed out. The session cookie itself is untouched, the visitor's other tabs correct it through the cross-tab channel, and the next load is normal. Fixing it would need a per-browser identifier that outlives the cookie, which is the thing the design deliberately does not keep.
-
-**Your password hasher may silently truncate.** Laravel's default bcrypt driver ignores everything past the 72th byte, so `('a' × 72) . 'anything'` authenticates a user registered with `('a' × 72) . 'something-else'`. lukk validates `max:255` on every password field and imposes no composition rules of its own, but the hashing is your application's — NIST SP 800-63B §5.1.1.2 says a verifier SHALL NOT truncate, and argon2id has no such limit. Set `HASH_DRIVER=argon2id` if long passphrases matter to you.
 
 **No per-session listing or revoke.** You can end the current session (`POST /auth/logout`), every session (`DELETE /auth/sessions`) and every *other* session (`DELETE /auth/sessions/others`) — but there is no "here are your five devices, sign out the third" surface. The data exists (`RefreshTokenRepository::allForUser`), and `GET /auth/account/export` returns it for the GDPR path, but nothing revokes one session by id. If you need that, build it on the repository.
 

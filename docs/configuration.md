@@ -20,7 +20,7 @@ After publishing the config with `php artisan vendor:publish --tag=lukk-config`,
 
 #### Asymmetric keys (RS256 / ES256)
 
-Used only when `algorithm` is asymmetric. Generate a keypair with `php artisan lukk:keygen` (add `--algorithm=ES256` for EC), which populates a `keys` block (`active` kid, `private`, `passphrase`, `public` kid→key map). Under an asymmetric algorithm, `GET {path}/jwks` publishes the public keys as a JWK Set (RFC 7517). See [Deployment → Asymmetric keys](/deployment) for the full block, key-rotation procedure, and the JWKS endpoint.
+Used only when `algorithm` is asymmetric. Generate a keypair with `php artisan lukk:keygen` (add `--algorithm=ES256` for EC, `--kid=` to name the key). It **writes nothing**: it prints the private and public PEMs and the `.env` lines to set (`LUKK_ALGORITHM`, `LUKK_ACTIVE_KID`, `LUKK_PRIVATE_KEY`, `LUKK_PUBLIC_KEY`), and you store the keys yourself. Those feed the `keys` block (`active` kid, `private`, `passphrase`, `public` kid→key map). Under an asymmetric algorithm, `GET {path}/jwks` publishes the public keys as a JWK Set (RFC 7517). See [Deployment → Asymmetric keys](/deployment) for the full block, key-rotation procedure, and the JWKS endpoint.
 
 ### Issuer & audience
 

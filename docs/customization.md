@@ -102,7 +102,7 @@ PHP raises a fatal on a mismatched signature, so an implementation (or a `Databa
 
 ## Reshaping responses
 
-The login, refresh, and logout responses are `Responsable` contracts. Rebind one to change the body shape, add headers, or switch between JSON and cookies:
+The token-bearing and branching responses are `Responsable` contracts. Rebind one to change the body shape, add headers, or switch between JSON and cookies:
 
 ```php
 use Lukk\Contracts\LoginResponse;
@@ -111,7 +111,7 @@ use App\Http\Responses\MyLoginResponse;
 $this->app->bind(LoginResponse::class, MyLoginResponse::class);
 ```
 
-The response contracts are `LoginResponse`, `RefreshResponse`, `LogoutResponse`, and `TwoFactorChallengeResponse`.
+The response contracts are `LoginResponse`, `RefreshResponse`, `LogoutResponse`, `RegisterResponse`, `TwoFactorChallengeResponse` and `EmailVerificationResponse`. A contract exists only where the body is a genuine swap seam — it carries a token pair or a user resource, or it branches on the request (`EmailVerificationResponse` is a `204` for a JSON client and a redirect to `frontend_url` for a browser). Fixed acknowledgements and data reads (`{"status": "password-reset"}`, the passkey list, JWKS, the account export) return JSON directly; there is nothing to swap.
 
 > [!WARNING]
 > **`LogoutResponse` takes `bool $clearRefreshCookie` (lukk 0.7.0), and a rebound implementation must honour it.** It is `false` when `POST /auth/logout` did not accept the refresh cookie from that request — none was presented, or the request had a shape a cross-site form could produce. Sending the clearing `Set-Cookie` anyway re-opens the forced-logout CSRF the check exists to close: a clearing cookie on a `204` is stored even after a fully cross-site top-level navigation, so any page could sign your visitors out.
@@ -141,10 +141,15 @@ The cryptographic and revocation seams are contracts too. Rebind `Contracts\Toke
 | `RefreshTokenRepository` | `DatabaseRefreshTokenRepository` | Persists refresh tokens and families. |
 | `Denylist` | `CacheDenylist` | Records and checks revoked `jti`/`fid` values. |
 | `LoginResponse` / `RefreshResponse` / `LogoutResponse` | built-in | Shape the HTTP responses. |
+| `RegisterResponse` | built-in | Shapes the [registration](/registration) response (token pair, challenge, or `201`). |
 | `TwoFactorChallengeResponse` | built-in | Shapes the 2FA login challenge. |
+| `EmailVerificationResponse` | built-in | Answers a verified link: `204` for JSON, a redirect to `frontend_url` for a browser. |
+| `LockoutRepository` | `DatabaseLockoutRepository` | Stores the [account-lockout](/account-lockout) counters; also `forget()` for erasure and `summariesForSubjects()` for the export. |
 | `TwoFactorProvider` | `Google2FaTotpProvider` | Generates and verifies TOTP codes. |
 | `WebAuthnCeremony` | `SpomkyWebAuthnCeremony` | Performs WebAuthn registration/assertion, and reports what an assertion proved. |
 | `PasskeyRepository` | `DatabasePasskeyRepository` | Persists passkey credentials. |
+
+Two more contracts describe your **user model** rather than a container binding: `TwoFactorAuthenticatable` (what the `HasTwoFactorAuthentication` trait provides for [two-factor](/two-factor-authentication)) and `HasTokenAbilities` (what the trait of the same name provides for [abilities](/abilities)). lukk only narrows to them in PHPDoc, so using the trait is enough; implementing the interface as well lets your own static analysis check it.
 
 ::: warning Implementing `WebAuthnCeremony` yourself (lukk 0.7.0)
 `verifyAssertion()` returns a `Lukk\Support\PasskeyAssertion` (`signCount`, `userVerified`, `multiFactor`) instead of an `int`; it and `authenticationOptions()` take an optional `?string $userVerification` (`required`/`preferred`/`discouraged`, or `null` for your configured value), and there is a new `isMultiFactor(PasskeyRecord): bool`.

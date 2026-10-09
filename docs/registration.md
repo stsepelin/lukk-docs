@@ -11,7 +11,7 @@ lukk ships a first-party `POST /auth/register` that mirrors login: it creates th
 
 Registration reuses the exact login machinery. `POST /auth/register`:
 
-1. **Validates** the input (`RegisterRequest` — email + a confirmed password by default; customizable).
+1. **Validates** the input (`RegisterRequest` — `name`, the identifier (`email` by default) and a confirmed password; customizable).
 2. **Creates** the user — via your `Lukk::registerUsing()` hook, or the default (the configured model with `email` + a hashed `password`).
 3. **Fires** `Illuminate\Auth\Events\Registered`, so — when `features.email_verification` is on and your model is `MustVerifyEmail` — the framework listener sends the (lukk-signed) verification link.
 4. **Responds** the same way login does:
@@ -86,16 +86,19 @@ Declare the matching validation rules with `Lukk::registerValidation()` (or rebi
 ```php
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
+use Lukk\Support\HashablePassword;
 
 Lukk::registerValidation(fn ($request) => [
     'name' => ['required', 'string', 'max:255'],
-    'email' => ['required', 'email', Rule::unique(User::class)],
-    'password' => ['required', 'confirmed', Password::defaults()],
+    'email' => ['required', 'string', 'max:255', 'email', Rule::unique(User::class)],
+    'password' => ['required', 'confirmed', 'max:255', HashablePassword::rule(), Password::defaults()],
     // add a captcha field, a terms checkbox, etc.
 ]);
 ```
 
-The default rules (`RegisterRequest`) are `name`, `email` (a valid, **unique** address), and `password` (`confirmed`, meeting `Password::defaults()`). Tune password strength app-wide with `Password::defaults()`.
+The default rules (`RegisterRequest`) are `name` (required), the identifier (a valid, **unique** address when it is `email`), and `password` (`confirmed`, at most 255 characters, meeting `Password::defaults()`). Tune password strength app-wide with `Password::defaults()` — see [Password policy](/security#password-policy).
+
+A hook **replaces** the default rules, so keep `HashablePassword::rule()` in yours: under bcrypt it refuses a new password longer than 72 bytes with a `422` (lukk 0.7.0). bcrypt reads only the first 72 bytes, so a longer password would be stored truncated and any string sharing that prefix would sign in (NIST SP 800-63B-4 §3.1.1.2); with Laravel's `hashing.bcrypt.limit` on it is a `500` instead. Other drivers pass untouched.
 
 ### Username instead of email
 
@@ -150,6 +153,7 @@ const { register } = useLukkAuth()
 
 async function submit() {
   const result = await register({
+    name: name.value,
     email: email.value,
     password: password.value,
     password_confirmation: passwordConfirmation.value,
