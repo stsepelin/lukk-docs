@@ -225,7 +225,11 @@ The same release (with `lukk-core` 0.12.0) also changes:
   lasts at most 10 min + 30 s), and cut to 30 s when the rotation of the pair it handed out lands. After
   that its end is only ever brought forward, never past the next link's. Every caller — the BFF's 401
   retry, the app-API proxy, SSR hydration — re-checks the journal right before its cookie leaves and seals
-  the newest pair if the session rotated the one it was handed meanwhile. So the journal can answer a replay
+  the newest pair if the session rotated the one it was handed meanwhile (taking the links it follows, as
+  an adoption does) — or seals nothing, leaving the browser its newer cookie, if the session has moved past
+  it and the links that led on have expired (a response slower than 30 s). For that the BFF remembers each
+  session's newest refresh token for five minutes after its last rotation, and forgets it on logout or
+  replacement. So the journal can answer a replay
   up to a refresh's duration + 30 s after lukk rotated — past lukk's own grace window, on a slow refresh —
   and those replays never reach lukk, so its reuse detection and `RefreshFamilyForked` don't see them.
   Both are deliberate deviations (the second from RFC 9700 §4.14.2), bounded to these windows and traded
