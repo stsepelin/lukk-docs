@@ -229,9 +229,10 @@ The same release (with `lukk-core` 0.12.0) also changes:
   an adoption does) — or seals nothing, leaving the browser its newer cookie, if the session has moved past
   it and the links that led on have expired (a response slower than the links' window: 30 s, up to
   10 min 30 s for a rotation nobody received). For that the BFF remembers each session's newest refresh
-  token for five minutes after its last rotation, and forgets it on logout or replacement. A step-up
-  confirmation answering on such a request is not recorded: the auth proxy answers `409` ("The session was
-  replaced.", as for a replaced session) and the client confirms again with the cookie the browser holds. A
+  token for five minutes after its last rotation, and forgets it on logout or replacement. On the
+  auth proxy's 401 retry (which gives up after 15 s) a stale pair is a backstop that only a journal
+  overflow reaches; a step-up confirmation answering there is not recorded: the auth proxy answers `409`
+  ("Your session was renewed meanwhile. Please confirm again.") and the user is asked to confirm again. A
   session that ends while the app-API proxy or SSR hydration is re-sealing has that seal dropped — the
   session cookie leaves no response — and the pair it sealed revoked. So the journal can answer a replay
   up to a refresh's duration + 30 s after lukk rotated — past lukk's own grace window, on a slow refresh —
