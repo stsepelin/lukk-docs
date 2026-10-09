@@ -221,7 +221,11 @@ The same release (with `lukk-core` 0.12.0) also changes:
   [journalled](/transport-modes#a-slow-rotation) per session, from the token it consumed to the pair it
   produced, and a request still presenting a consumed token is handed the chain's newest pair instead of
   replaying it — ten minutes for a link nobody received, 30 s once its pair has reached the session,
-  counted from when the BFF received the pair and only ever shortened. So the journal can answer a replay
+  counted from when the BFF received the pair, or from the first request adopting through it (so a hold
+  lasts at most 10 min + 30 s), and cut to 30 s when the rotation of the pair it handed out lands. After
+  that its end is only ever brought forward, never past the next link's. Every caller — the BFF's 401
+  retry, the app-API proxy, SSR hydration — re-checks the journal right before its cookie leaves and seals
+  the newest pair if the session rotated the one it was handed meanwhile. So the journal can answer a replay
   up to a refresh's duration + 30 s after lukk rotated — past lukk's own grace window, on a slow refresh —
   and those replays never reach lukk, so its reuse detection and `RefreshFamilyForked` don't see them.
   Both are deliberate deviations (the second from RFC 9700 §4.14.2), bounded to these windows and traded
