@@ -75,9 +75,14 @@ The `refresh_tokens` table already carries the nullable `guard` column that scop
 lukk auto-mounts each guard's **core session** routes under its `path` (+ `domain`), wired to `auth:{name}` and that guard's crypto identity:
 
 ```
-POST admin/auth/login      admin/auth/refresh      admin/auth/logout
-DELETE admin/auth/sessions admin/auth/sessions/others  POST admin/auth/confirm-password
+GET    admin/auth/jwks
+POST   admin/auth/login      admin/auth/refresh      admin/auth/logout
+POST   admin/auth/session/claim                      admin/auth/confirm-password
+DELETE admin/auth/sessions   admin/auth/sessions/others
+POST   admin/auth/two-factor-challenge               (only while that guard enforces two-factor)
 ```
+
+`DELETE admin/auth/sessions` follows the guard's own `features.logout_all`. `two-factor-challenge` is mounted on the same rule login challenges on, so an enrolled account is never challenged without somewhere to answer; the two-factor *management* routes, passkeys, registration and the other features stay on the default guard.
 
 Protect admin routes with `auth:admin`; they resolve against the `admins` table with the admin token identity.
 

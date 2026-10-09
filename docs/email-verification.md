@@ -57,7 +57,7 @@ Both are throttled by the `lukk-email-verification` limiter (the authenticated r
 
 ### Sending the first email
 
-Registration is your app's job (lukk is not a registration package). After creating the user, trigger the notification the way you already would:
+With lukk's own [registration](/registration) (`features.registration`), this is done for you: `POST /auth/register` fires Laravel's `Registered` event, and the framework listener sends the link. If you create users yourself instead, trigger the notification the way you already would:
 
 ```php
 event(new \Illuminate\Auth\Events\Registered($user));
@@ -130,12 +130,12 @@ const { verified, sending, sendVerificationEmail, syncAfterVerify } = useLukkEma
 
 | Member | Type | What it is |
 |---|---|---|
-| `verified` | `ComputedRef<boolean>` | Whether the loaded user's `email_verified_at` is set. |
-| `sending` | `Ref<boolean>` | True while a resend is in flight — bind a button's `disabled` to it. |
+| `verified` | `ComputedRef<boolean>` | Whether the loaded user is verified: `email_verified_at` is set, or a boolean `email_verified` is `true`. |
+| `sending` | `Readonly<Ref<boolean>>` | True while a resend is in flight — bind a button's `disabled` to it. |
 | `sendVerificationEmail()` | `() => Promise<void>` | Resend the link to the current user (a no-op server-side if already verified; throttled). |
 | `syncAfterVerify()` | `() => Promise<void>` | Reload the user (used on the verify callback page). |
 
-`verified` reads the same `useLukkAuth().user` you already load, so your `user.endpoint` must expose `email_verified_at` for it to reflect reality.
+`verified` reads the same `useLukkAuth().user` you already load, so your `user.endpoint` must expose `email_verified_at` (or a boolean `email_verified`) for it to reflect reality.
 
 ```vue
 <script setup lang="ts">

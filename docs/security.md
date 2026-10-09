@@ -87,7 +87,8 @@ In BFF mode the server can hydrate the authenticated `user` during server render
 |---|---|
 | Pin the algorithm on decode; reject `alg=none` and mismatches | RFC 8725 |
 | Validate `iss`/`aud`/`exp` (required) + `nbf`/`iat` when present; carry `jti` | RFC 7519, 8725 |
-| `typ=at+jwt` header | RFC 9068 |
+| `typ=at+jwt` header (explicit typing, so a challenge token can't pass as a bearer) | RFC 8725 §3.11, RFC 9068 §2.1 |
+| Access-token claims follow RFC 9068's shape (`iss`, `aud`, `sub`, `exp`, `iat`, `jti`, `scope`) **without** claiming conformance: there is no OAuth client, so no `client_id` | RFC 9068 (partial, by design) |
 | Access TTL ≤ 15 min | RFC 9700 |
 | Refresh-token rotation | OAuth 2.1 §6 |
 | Reuse detection → family revoke | RFC 9700 §4.14 |

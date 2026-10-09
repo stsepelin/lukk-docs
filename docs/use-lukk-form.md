@@ -186,7 +186,7 @@ You may re-baseline the defaults with `defaults` — for example after loading a
 ```ts
 const form = useLukkForm({ title: '', body: '' })
 
-const post = await $lukk('/posts/1')   // load current values
+const post = await useLukkFetch()<{ title: string, body: string }>('/posts/1') // load current values
 form.data.title = post.title
 form.data.body = post.body
 form.defaults()                         // baseline := current data → isDirty is false again

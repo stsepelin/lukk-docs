@@ -138,7 +138,7 @@ The cache store backing the revocation denylist. `null` uses your application's 
 > Across **multiple nodes** this must be a **shared, persistent** store (e.g. Redis) — not the `array` driver and not a per-node cache. The same store also backs the TOTP replay cache and the passkey/2FA throttles; if it isn't shared, a revoked token can still be honored on another node and replay protection isn't authoritative.
 
 > [!WARNING]
-> lukk **refuses to boot in production** on an `array` or `null` cache store. Token revocation, TOTP replay protection and passkey challenges all live here; an array store is per-process, so a revoked token stays valid on every other worker and the single-use guarantees stop being guarantees — silently. Outside production nothing changes, and the array driver stays the right default for a test suite.
+> lukk **refuses an `array` or `null` cache store in production.** The check runs when the denylist store is first resolved — on the first request that verifies a token or touches revocation, a TOTP replay marker or a passkey challenge — not at boot, so a misconfigured deploy boots and then throws a `RuntimeException` there. Token revocation, TOTP replay protection and passkey challenges all live here; an array store is per-process, so a revoked token stays valid on every other worker and the single-use guarantees stop being guarantees — silently. Outside production nothing changes, and the array driver stays the right default for a test suite.
 
 ### Output mode
 
@@ -205,7 +205,8 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
 Three of these default **on** and are worth knowing about: `change_password` and `account_deletion`
 add routes (`account_deletion` an irreversible one — see [Account Deletion](/account-deletion)), and
 `gate_auth_routes` stops a [pinned token](/abilities#lukk-s-own-routes) reaching lukk's own
-session-management and account-security routes. `abilities` only matters for an install whose grants
+session-management and account-security routes (account erasure and export are gated whatever it
+says). `abilities` only matters for an install whose grants
 come solely from pinned sessions; configuring `Lukk::abilitiesUsing()` turns the feature on by
 itself.
 

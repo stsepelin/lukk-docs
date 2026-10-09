@@ -16,7 +16,7 @@ An Eloquent model serializes `email_verified_at` (respecting `$hidden`/`$casts`)
 
 ### `UserResource` (optional)
 
-For a shaped, guaranteed-aligned response, extend the optional base resource `Lukk\Http\Resources\UserResource`. It emits the identifier and a derived `email_verified` boolean (the fields the client reads); override `fields()` to add your own:
+For a shaped, guaranteed-aligned response, extend the optional base resource `Lukk\Http\Resources\UserResource`. It emits the `id` and a derived `email_verified` boolean (`null` when the model isn't `MustVerifyEmail`), plus — when [abilities](/abilities) are in use, or the token carries a `scope` or `pin` claim — the token's `abilities` and a `token_pinned` boolean, which is the only way a BFF client can learn them. Those two are emitted only when the resource wraps the token's own user. Override `fields()` to add your own:
 
 ```php
 namespace App\Http\Resources;
@@ -39,7 +39,7 @@ class UserResource extends \Lukk\Http\Resources\UserResource
 Route::get('/me', fn (Request $request) => new UserResource($request->user()))->middleware('auth:api');
 ```
 
-This emits `{ "data": { "id": …, "email_verified": …, "name": …, "roles": … } }`. A Laravel API Resource **wraps in `data` by default** — the client [auto-unwraps a clean `{ data }`](#response-shape-user-key), so `useLukkAuth().user` is the flat user either way; you can also `JsonResource::withoutWrapping()` if you prefer a bare object.
+This emits `{ "data": { "id": …, "email_verified": …, "name": …, "roles": … } }` — with `"abilities": […], "token_pinned": …` after `email_verified` when abilities are in play. A Laravel API Resource **wraps in `data` by default** — the client [auto-unwraps a clean `{ data }`](#response-shape-user-key), so `useLukkAuth().user` is the flat user either way; you can also `JsonResource::withoutWrapping()` if you prefer a bare object.
 
 `UserResource` is a **convenience, not a contract** — lukk's actual user contract is still Laravel's `Authenticatable` + the opt-in `MustVerifyEmail`; you never have to use the resource.
 

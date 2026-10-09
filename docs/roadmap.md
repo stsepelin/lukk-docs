@@ -47,7 +47,7 @@ Grouped by theme; likely order: impersonation → personal access tokens.
 
 - **`lukk-core`** — a framework-agnostic auth client (`createLukkClient` hooks seam), WebAuthn helpers, and the full contract types (zero runtime deps).
 - **`lukk-nuxt`** — a Nuxt 3/4 module with **BFF** (sealed-cookie proxy) and **direct** transport modes behind one composable API.
-- **Composables** — `useLukkAuth` (login + 2FA challenge + register + logout + sessions + restore + user), `useLukkTwoFactor`, `useLukkConfirmation`, `useLukkPasskeys`, `useLukkEmailVerification`, `useLukkPasswordReset`, `useLukkFetch` (an auth-aware `$fetch`), and `useLukkForm` (Inertia-`useForm`-parity with nested errors + `rememberKey`).
+- **Composables** — `useLukkAuth` (login + 2FA challenge + register + logout + sessions + restore + user), `useLukkTwoFactor`, `useLukkConfirmation`, `useLukkPasskeys`, `useLukkEmailVerification`, `useLukkPasswordReset`, `useLukkChangePassword`, `useLukkAccount` (export + erasure), `useLukkAbilities`, `useLukkFetch` (an auth-aware `$fetch`), and `useLukkForm` (Inertia-`useForm`-parity with nested errors + `rememberKey`).
 - **Route middleware** — `lukk-auth`, `lukk-guest`, `lukk-verified`, `lukk-confirmed`.
 - **Typed identifier** — the `LukkIdentifier` union (`{ email } | { username }`) so `login()` / `register()` take the configured identifier with type safety.
 - **User shaping** — an augmentable `LukkUser` contract with automatic `{ data }`-wrapper unwrapping.

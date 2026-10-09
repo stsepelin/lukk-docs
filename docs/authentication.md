@@ -13,9 +13,11 @@ When `lukk.routes` is `true` (the default), the package registers these routes u
 | `POST` | `/auth/login` | login throttle | Exchange email + password for a token pair. |
 | `POST` | `/auth/refresh` | `throttle:lukk-refresh` | Exchange a refresh token for a rotated pair. |
 | `POST` | `/auth/logout` | `auth:api` (lukk ≤ 0.6); none from 0.7.0 — see [Logging out](#logging-out) | Revoke the current session. |
-| `DELETE` | `/auth/sessions` | `auth:api` | Revoke every session for the user. |
-| `DELETE` | `/auth/sessions/others` | `auth:api` | Revoke every session **except** the current one. |
+| `DELETE` | `/auth/sessions` | `auth:api`, `lukk.sessions` pin gate | Revoke every session for the user. Mounted while `features.logout_all` is on. |
+| `DELETE` | `/auth/sessions/others` | `auth:api`, `lukk.sessions` pin gate | Revoke every session **except** the current one. |
 | `POST` | `/auth/session/claim` | `auth:api`, `throttle:lukk-claim` | Confirm the client received a new session (lukk 0.7.0; see [`claim_seconds`](/configuration#refresh-behavior)). `204`. |
+
+The `lukk.sessions` pin gate refuses (`403`) a token whose grant was [pinned](/abilities#lukk-s-own-routes) without that ability — a personal access token, say. Ordinary sign-ins are never gated.
 
 > [!NOTE]
 > Login is limited twice: a per-IP route throttle (`throttle:lukk-login`, 30 attempts a minute by default) and the per-identifier failure limiter (keyed on the folded identifier, never the account). Both are described in [Configuration → Rate Limits](/configuration#rate-limits), along with the rest — refresh, two-factor, passkeys, and the two buckets with [no key of their own](/configuration#throttles-without-a-key-of-their-own): the claim route (`lukk-claim`, keyed per **user**) and the logout refresh-token lookup, which has no route throttle at all.

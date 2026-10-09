@@ -77,7 +77,9 @@ sequenceDiagram
 Login is fully passwordless:
 
 1. The client requests options from `/auth/passkeys/login-options`. The response includes an opaque `ceremony_id` and the WebAuthn `options`; pass the options to `navigator.credentials.get()`.
-2. The browser returns an assertion, which the client posts to `/auth/passkeys/login` along with the `ceremony_id`. lukk verifies the signature and returns the normal [token pair](/authentication#logging-in), carrying `amr: ["pop","user"]` — or `["pop","user","mfa"]` when the assertion was [multi-factor](#when-a-passkey-counts-as-multi-factor).
+2. The browser returns an assertion, which the client posts to `/auth/passkeys/login` along with the `ceremony_id`. lukk claims the challenge, verifies the signature and then either:
+   - returns the normal [token pair](/authentication#logging-in), carrying `amr: ["pop","user","mfa"]` when the assertion was [multi-factor](#when-a-passkey-counts-as-multi-factor) — or `["pop","user"]` on an account with no confirmed TOTP; or
+   - answers `{ "two_factor": true, "challenge_token": "…" }` when the assertion was single-factor and the account has a confirmed TOTP. The client completes it at `/auth/two-factor-challenge`, exactly like the [password path](/two-factor-authentication#logging-in-with-2fa).
 
 The `ceremony_id` is the UUID lukk issued. Anything else is refused with `422` before it reaches the cache (lukk 0.7.0).
 
@@ -92,11 +94,19 @@ sequenceDiagram
     App->>B: navigator.credentials.get(options)
     B-->>App: assertion (signed by the private key)
     App->>API: POST /auth/passkeys/login { ceremony_id, credential }
-    Note over API: pull+verify challenge (single-use), origin/rp_id,<br/>signature vs stored public key, sign-count · resolve user
-    API-->>App: 200 { access_token, refresh_token } · amr ["pop","user","mfa"]
+    Note over API: claim challenge atomically (single-use),<br/>verify origin/rp_id, signature vs stored public key,<br/>sign-count · resolve user
+    alt multi-factor assertion, or no confirmed TOTP
+        API-->>App: 200 { access_token, refresh_token }
+    else single-factor assertion and a confirmed TOTP
+        API-->>App: 200 { two_factor: true, challenge_token }
+        App->>API: POST /auth/two-factor-challenge { challenge_token, code }
+        API-->>App: 200 { access_token, refresh_token } · amr pop, user, otp
+    end
 ```
 
-The challenge is server-generated, single-use, and held server-side (in the cache) — it never travels inside a JWT.
+The challenge is server-generated, single-use, and held server-side (in the cache) — it never travels inside a JWT. Redemption **claims** it with an atomic cache `add()` keyed on the challenge value (lukk 0.7.0), so of two concurrent requests presenting the same ceremony exactly one wins; `Cache::pull()`, which it replaced, is a get followed by a forget. The claim is atomic only on a store that implements `add()` natively (Redis, Memcached, database, file, DynamoDB) — not APC or the array store, where the cache falls back to get-then-put.
+
+The options carry a WebAuthn `timeout` equal to [`passkeys.challenge_ttl`](/configuration#passkeys), in milliseconds (lukk 0.7.0), so the browser stops prompting when lukk forgets the challenge. Without it the browser's own default — often five minutes — applied while lukk's challenge lasted two, and a slow PIN or biometric entry ended in "could not be verified".
 
 ### When a passkey counts as multi-factor
 
@@ -155,7 +165,7 @@ When your front-end and API live on different subdomains (`app.example.com` and 
 ### Security notes
 
 - Credential IDs are globally unique, and the COSE public key is **encrypted at rest**.
-- A regressing signature counter is rejected and dispatches `Events\PasskeyCloneDetected`, but a `0` counter is never flagged — synced passkeys (iCloud, Google, 1Password) always report `0`.
+- A regressing signature counter is rejected and dispatches `Events\PasskeyCloneDetected`, but a `0` counter is never flagged — synced passkeys (iCloud, Google, 1Password) always report `0`. The stored counter only ever moves forward (lukk 0.7.0): the write is conditional on the stored value being lower, so two concurrent assertions can't roll it back and let a clone presenting the higher value pass later.
 - `rp_id` and `origins` are **required** when passkeys are enabled — lukk throws on an empty value rather than fall back to a weak default.
 - By default lukk **asks for user verification** at login (`user_verification` → `required`) — the authenticator must verify the user (biometric/PIN), not just their presence. Lower it to `preferred` only if you must support authenticators that can't verify the user (see [Configuration](/configuration#passkeys)). Whether a given login *was* multi-factor is read from the assertion, [not from this setting](#when-a-passkey-counts-as-multi-factor), and a step-up sets its own requirement.
 - Registration is verified against the COSE algorithms lukk advertised in the options (WebAuthn L3 §7.1), not a library default.
@@ -178,7 +188,7 @@ When your front-end and API live on different subdomains (`app.example.com` and 
 ```ts
 const {
   register, // (name?) => Promise<void>
-  login,    // () => Promise<void>   — passwordless, then loads the user
+  login,    // () => Promise<LoginResult> — passwordless; a session, or a two-factor challenge
   confirm,  // () => Promise<void>   — step-up via passkey
   list,     // () => Promise<{ passkeys: PasskeySummary[] }>
   remove,   // (credentialId) => Promise<void>
@@ -214,14 +224,18 @@ The browser prompts the user to create the passkey; `register` handles the optio
 
 ### Passwordless login
 
-`login()` runs the assertion ceremony and, on success, persists the tokens and loads the user — no email or password:
+`login()` runs the assertion ceremony and, on success, persists the tokens and loads the user — no email or password. It resolves to a `LoginResult`: when the assertion was single-factor and the account has a confirmed TOTP, lukk answers with a two-factor challenge instead of a session, `pendingTwoFactor` is set, and no user is loaded:
 
 ```vue
 <script setup lang="ts">
 const { login } = useLukkPasskeys()
+const { pendingTwoFactor } = useLukkAuth()
 
 async function signInWithPasskey() {
   await login()
+  if (pendingTwoFactor.value) {
+    return navigateTo('/two-factor') // complete it with useLukkAuth().verifyTwoFactor()
+  }
   await navigateTo('/dashboard')
 }
 </script>

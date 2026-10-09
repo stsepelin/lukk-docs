@@ -106,8 +106,8 @@ const { sending, resetting, sendResetLink, reset } = useLukkPasswordReset()
 
 | Member | Type | What it is |
 |---|---|---|
-| `sending` | `Ref<boolean>` | True while the reset-link request is in flight — bind a button's `disabled` to it. |
-| `resetting` | `Ref<boolean>` | True while the reset submission is in flight. |
+| `sending` | `Readonly<Ref<boolean>>` | True while the reset-link request is in flight — bind a button's `disabled` to it. |
+| `resetting` | `Readonly<Ref<boolean>>` | True while the reset submission is in flight. |
 | `sendResetLink(email)` | `(email: string) => Promise<void>` | Ask lukk to email a reset link. Always resolves (no enumeration; throttled). |
 | `reset(input)` | `(input: ResetPasswordInput) => Promise<void>` | Submit the token, email, and new password. Rejects with a `LukkError` (`422`) on a bad token or weak/mismatched password. |
 
