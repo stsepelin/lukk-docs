@@ -41,9 +41,9 @@ In this order, and the order is the substance:
 1. **Reads the identifier**, while the user row is still whole.
 2. **Revokes every session** — denylist first, so every access token dies immediately across every
    node.
-3. **Erases lukk's artifacts and the user**, in one transaction: refresh tokens, passkeys,
-   lockout counters, a pending password-reset row, then the row itself (which carries the two-factor
-   material).
+3. **Erases lukk's artifacts and the user**, in one transaction (one per connection involved — see
+   below): refresh tokens, passkeys, lockout counters, a pending password-reset row, then the row
+   itself (which carries the two-factor material).
 4. **Fires `AccountDeleted`** after the commit.
 
 > [!IMPORTANT]
@@ -56,7 +56,7 @@ In this order, and the order is the substance:
 
 Passkeys are erased through whatever [`PasskeyRepository`](/customization#available-contracts) is bound, and the export reads them the same way (lukk 0.7.0). Earlier releases checked for a table literally named `passkeys` first, so a store that isn't that table — Redis, another service, a renamed model — was skipped: erasure reported success while the passkeys survived, and the export omitted them. A replacement store must therefore answer an empty or not-yet-provisioned store with `0` and `[]` rather than throw.
 
-The pending password-reset row is deleted through the broker named by [`password_reset.broker`](/password-reset#setup) (or the default one) whenever that broker's table exists — whether or not `features.password_reset` is on, because the row holds the email address in plaintext and Laravel doesn't garbage-collect the table by default. The table is looked for on the broker's own connection, `auth.passwords.<broker>.connection` (lukk 0.7.0); earlier releases looked on the default connection, so a broker on another one kept the row after the account was gone.
+The pending password-reset row is deleted through the broker named by [`password_reset.broker`](/password-reset#setup) (or the default one) whenever that broker's table exists — whether or not `features.password_reset` is on, because the row holds the email address in plaintext and Laravel doesn't garbage-collect the table by default. The table is looked for on the broker's own connection, `auth.passwords.<broker>.connection` (lukk 0.7.0); earlier releases looked on the default connection, so a broker on another one kept the row after the account was gone. That key may name the connection with an enum, backed or pure, as Laravel's config allows; a pure enum stands for its case name (lukk 0.7.0 — before, an enum there threw before anything was erased).
 
 Steps 2 and 3 are ordered deliberately too. Revoking first means a failure later leaves the account
 **unreachable** rather than half-erased and still usable. And running everything else in one
@@ -103,10 +103,15 @@ the identifier — keep it out of logs.
 
 > [!NOTE]
 > **The all-or-nothing guarantee is per database connection.** SQL has no cross-connection
-> transaction without two-phase commit, so if your user model lives on a different connection than
-> lukk's tables — identities in a shared directory database, application tables local — each gets its
-> own transaction. lukk gives the user's connection one of its own, so anything that *throws* during
-> erasure still rolls both back. What can't be covered is a failure during the commit itself, which
+> transaction without two-phase commit, so when the rows erasure writes live on more than one
+> connection, each gets its own transaction. lukk opens one on every connection it writes to — the
+> default one (passkeys, lockouts, your `AccountDeleting` listeners' default queries), the password
+> broker's, the refresh-token store's (a [`useRefreshTokenModel`](/customization#swapping-the-refresh-token-model)
+> model may have its own), and the user model's — nested, so a connection named twice is a savepoint
+> rather than a second transaction (lukk 0.7.0; earlier releases opened only the token store's, so with
+> that model elsewhere the passkey, lockout and reset-row deletes ran in autocommit, and a disposal that
+> threw kept the user and lost their credentials). So anything that *throws* during erasure rolls
+> them all back. What can't be covered is a failure during the commit itself, which
 > can leave the user erased and lukk's rows restored. That's the direction lukk prefers anyway (the
 > account is unreachable rather than half-erased and still usable), and `lukk:prune` sweeps what's
 > left, but it isn't all-or-nothing and this page won't claim it is.

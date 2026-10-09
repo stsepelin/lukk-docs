@@ -128,10 +128,13 @@ interface LukkError {
   message: string
   errors?: Record<string, string[]> // Laravel validation errors (422)
   reason?: string                    // lukk's machine-readable cause, where it names one
+  retryAfter?: number                // the response's Retry-After, in seconds
 }
 ```
 
 `reason` (lukk-core 0.12.0) is passed through when lukk's body carries a string one. Branch on it, never on `message`: a `423` with `reason: "confirmation_session_mismatch"` means the held step-up belongs to another session — discard it and confirm again — while a `423` without one means *earn a confirmation*.
+
+`retryAfter` (lukk-core 0.12.0) is the response's `Retry-After` header when it gives delay-seconds (RFC 9110 §10.2.3); the HTTP-date form is left out rather than guessed at, so the field is absent then. It is how a binding comes back when the server asked: a `429` from a throttle, or the lukk-nuxt BFF's `503` for a refresh lukk is slow to rotate, which [lukk-nuxt's client retries once](/transport-modes#a-slow-rotation) after at most ten seconds. lukk-core itself does not retry on it.
 
 ```ts
 try {
