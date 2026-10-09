@@ -81,7 +81,7 @@ Set it to `false` only if you have a specific reason to keep other sessions aliv
 'password_reset' => ['revoke_sessions' => false],
 ```
 
-**Passkeys survive a reset by default**, as the second factor does: a reset proves control of the mailbox, not of the authenticators. That also means a passkey an attacker enrolled while holding the password — or one enrolled on an account squatted before its owner verified it — outlives the recovery. Set `revoke_passkeys` (env `LUKK_RESET_REVOKE_PASSKEYS`, lukk 0.7.0, default `false`) to make a reset mean "start over": it removes every passkey on the account and dispatches [`PasskeyDeleted`](/events#authenticator-events) for each.
+**Passkeys survive a reset by default**, as the second factor does: a reset proves control of the mailbox, not of the authenticators. That also means a passkey an attacker enrolled while holding the password — or one enrolled on an account squatted before its owner verified it — outlives the recovery. Set `revoke_passkeys` (env `LUKK_RESET_REVOKE_PASSKEYS`, lukk 0.7.0, default `false`) to make a reset mean "start over": it removes every passkey on the account and dispatches [`PasskeyDeleted`](/events#authenticator-events) for each. Keep `revoke_sessions` on with it (the default): a session that survives the reset can step up and enroll a new passkey straight away, which makes removing them pointless.
 
 The new password is written to the column your model names (`getAuthPasswordName()`), the one sign-in reads — up to lukk 0.6 reset and change-password always wrote `password`, so a model with another password column got a `500`.
 

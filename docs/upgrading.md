@@ -56,8 +56,9 @@ impact tags. Read it (and the changelog) before bumping:
 >   `webauthn` is gone: replace a check for it with `pop`, and "was this multi-factor" with `mfa`.
 > - **`amr` now survives refresh**, stored in a new `refresh_tokens.amr` column. The column went into
 >   the existing core migration, so a fresh install gets it. An install that already ran that migration
->   adds it with a migration of its own — until then nothing breaks, the claim just disappears after
->   the first refresh as before:
+>   adds it with a migration of its own — republishing doesn't help, the copy gets a new timestamp and
+>   fails with "table already exists". Until then nothing breaks for reading `amr`: the claim just
+>   disappears after the first refresh as before. (But see the password step-up below.)
 >
 >   ```php
 >   Schema::table('refresh_tokens', function (Blueprint $table) {
@@ -66,37 +67,62 @@ impact tags. Read it (and the changelog) before bumping:
 >   ```
 >
 >   A custom [`RefreshTokenRepository`](/customization#swapping-storage) (or a subclass overriding
->   `persist()`) must add the trailing `?string $amr = null` argument and round-trip it.
+>   `persist()`) must add the trailing `?string $amr = null` argument and round-trip it. `amr` — and the
+>   new [`auth_time`](/tokens-and-rotation#the-auth-time-claim) claim — are now **reserved**: a
+>   `tokenClaimsUsing` hook can neither forge nor erase them.
 > - **A passkey stands in for an enrolled TOTP only when the assertion was multi-factor** — UV flag on a
 >   credential already `uvInitialized`, [decided per assertion](/passkeys#when-a-passkey-counts-as-multi-factor),
->   no longer by `user_verification`. Otherwise passkey login answers a two-factor challenge. A custom
->   [`WebAuthnCeremony`](/customization#available-contracts) must adopt the new signatures.
+>   no longer by `user_verification`. Otherwise `POST /auth/passkeys/login` answers
+>   `{"two_factor": true, "challenge_token": "…"}` like a password sign-in, and your client must complete it
+>   at `/auth/two-factor-challenge` (lukk-js 0.12 does).
+> - **A custom [`WebAuthnCeremony`](/customization#available-contracts)** must adopt the new signatures:
+>   `verifyAssertion()` returns a `PasskeyAssertion` and takes `?string $userVerification` and
+>   `int|string|null $owner` (the expected user handle on a step-up); `authenticationOptions()` takes
+>   `$userVerification`; and there is a new `isMultiFactor()`. **A custom `PasskeyRepository`** must
+>   return `bool` from a forward-only `updateSignCount()`, and answer an empty store without throwing,
+>   because erasure, export and `revoke_passkeys` now call whatever is bound. A mismatched method is a
+>   fatal on the first request that resolves the binding, not at boot.
 > - **Passkey step-up** must meet the account's highest available level. Use the new
 >   `POST /auth/confirm-passkey/options`; a refused step-up is `422` on `credential`, not `403`.
-> - **Password step-up** is refused with `422` on `password` in a single-factor session (`amr` without
->   `mfa`) on an account with a confirmed second factor or a user-verifying passkey — confirm with that
->   passkey, or sign in again with the second factor. A token with no `amr` keeps the old rule.
->   [Details](/confirmation#with-a-password).
+> - **Password step-up** is refused with `422` on `password` on an account with a second factor the guard
+>   enforces, or a user-verifying passkey, unless the session's token carries `mfa` in `amr` **and** its
+>   `auth_time` is within the new [`confirm.mfa_max_age`](/configuration#confirmation) (one day). **A token
+>   with no `amr` counts as single-factor** — so migrate the `amr` column, or such users must confirm with a
+>   passkey or sign in again after every refresh. [Details](/confirmation#with-a-password).
 > - **Cookie mode: token routes require JSON.** `login`, `register`, `refresh`, `two-factor-challenge`
 >   and `passkeys/login` answer **`415`** unless the request has a JSON body or `Sec-Fetch-Site:
 >   same-origin`/`none` (login CSRF, RFC 6265bis §5.7). Send `{}` as JSON for a cookie refresh; lukk-js
->   already does. Body mode is unchanged. [Details](/authentication#output-modes).
-> - **Under bcrypt, a new password over 72 bytes is a `422`** on register, reset and change-password. A
->   [`registerValidation()`](/registration#customizing-the-user-s-fields) hook must add
->   `HashablePassword::rule()` itself. See [Password policy](/security#password-policy).
->
-> Smaller ones to check: a failed sign-in now takes at least [`login_timebox_micros`](/configuration#sign-in-timebox)
-> (500 ms) and every `forgot-password` at least `password_reset.timebox_micros` (one second) — raise
-> either if your slowest real path takes longer, and queue the reset notification. A successful
-> sign-in clears only the per-address login bucket; the IP-independent one now decays instead. Non-account lockout subjects are stored as `idn:sha256:<digest>`. [Authenticator
-> events](/events#authenticator-events) are new — listen and notify the user. `features.logout_all`
-> is now honoured, and `features.rotation` / `reuse_detection` / `denylist` are removed (they were
-> never read). `LockoutRepository` gained `summariesForSubjects()`. Per-guard `features.lockout`, `lockout.*`,
-> `rate_limits.login.*` and `rate_limits.two_factor.*` are now honoured, so an extra guard that set
-> them gets them. The new [`password_reset.revoke_passkeys`](/password-reset#session-revocation) is off by
-> default. Reset and change-password now write the model's `getAuthPasswordName()` column.
-> `lukk:secret --guard` refuses a name that isn't letters, digits, `_` or `-`. See
-> [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md) for each with its impact tag.
+>   already does. Body mode is unchanged — except that its `/refresh` no longer reads a leftover refresh
+>   cookie at all. [Details](/authentication#output-modes).
+> - **Under bcrypt, a password over 72 bytes is refused** — a `422` on register, reset and
+>   change-password (lukk adds the check after a [`registerValidation()`](/registration#customizing-the-user-s-fields)
+>   rule set too), and "These credentials do not match" at **sign-in** against a bcrypt hash, which lukk
+>   could verify only in part. lukk never stored such a password; an import or a hasher with
+>   `hashing.bcrypt.limit` off may have, and those users must reset. See [Password policy](/security#password-policy).
+
+lukk `0.7.0`'s smaller changes, each with what to check:
+
+| Change | Impact | What to do |
+|---|---|---|
+| A failed sign-in takes at least [`login_timebox_micros`](/configuration#sign-in-timebox) (500 ms), every `forgot-password` at least [`password_reset.timebox_micros`](/password-reset#setup) (one second). | Low | Raise either if your slowest real path takes longer — the box pads, it never shortens. Queue the reset notification. |
+| [`leeway`](/configuration#refresh-behavior) is clamped to 0–300 s for every token lukk decodes. | Low | A larger `LUKK_LEEWAY` now acts as 300; fix the clock skew instead. |
+| [`passkeys.challenge_ttl`](/configuration#passkeys) defaults to 300 (was 120), is sent as the options' `timeout`, and the server keeps the challenge 30 s longer. | Low | None; an explicit `LUKK_PASSKEY_CHALLENGE_TTL` is kept. |
+| `ceremony_id` on passkey login and step-up must be the UUID lukk issued. | Low | A custom client sending anything else gets `422` on `ceremony_id`. |
+| [Unclaimed sessions](/configuration#refresh-behavior) (`claim_seconds`, off) and `POST /auth/session/claim` are new. | Low | Nothing until you set the key. A custom `RefreshTokenRepository` should populate `RefreshTokenRecord::$original`. |
+| With [`block_unverified_login`](/email-verification#blocking-unverified-login) on, an unverified account with two-factor is refused (`403`) before a challenge is issued, and at redemption. | Medium | None — the gate now applies to the two-factor path too. It and `features.email_verification` are read per guard. |
+| `DELETE /auth/sessions/others` answers a bare `204` (no `LogoutResponse`, no cookie cleared), and **`409`** for a bearer with no `fid`. | Low | A rebound `LogoutResponse` no longer shapes this route. Co-issuer clients should call `DELETE /auth/sessions`. |
+| `features.logout_all` is honoured; `rotation` / `reuse_detection` / `denylist` are removed (never read). | Medium if you set `logout_all` to `false` | `false` now removes `DELETE /auth/sessions` (a `404`). Delete the three dead keys. |
+| `LockoutRepository` gained `summariesForSubjects(array $subjects, ?string $guard): array`. | Medium if you implement it | Mirror `forget()`: reach exactly the rows it deletes, scoped to the guard. The [export](/account-deletion#the-export) gains `lockouts`. |
+| A success clears only the per-address login bucket; non-account lockout subjects are stored as `idn:sha256:<digest>`. | Low | None. Old locks keep their key and are still found by `lukk:release`, erasure and the export. |
+| Per-guard `features.lockout`, `lockout.*`, `rate_limits.login.*` and `rate_limits.two_factor.*` are honoured. | Low | Check that an extra guard's [overrides](/multiple-guards) are what you want enforced — they now are. |
+| New [`password_reset.revoke_passkeys`](/password-reset#session-revocation) (off). | Low | Keep `revoke_sessions` on with it. |
+| Reset and change-password write the model's `getAuthPasswordName()` column. | Low | Remove any `password` mutator you added to work around the `500`. |
+| `lukk.username` must be a plain column name not containing `password`; in debug, one naming no column is refused. | Low | Rename a dotted name that only worked under `authenticateUsing`. |
+| `lukk:secret --guard` refuses a name that isn't letters, digits, `_` or `-`. | Low | None. |
+| [Authenticator events](/events#authenticator-events) are new. | Low | Listen and notify the user out of band (NIST SP 800-63B-4 §4.1.2.1). |
+| `LogoutResponse` clears the cookie per guard and takes `bool $clearRefreshCookie`. | Low | A rebound one must honour the flag — see the logout warning above. |
+
+See [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md) for the full text of each.
 
 > [!WARNING]
 > **lukk `0.6.0` adds a `guard` column to `passkeys`** and turns **account deletion on by default**.

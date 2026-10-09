@@ -68,14 +68,19 @@ Content-Type: application/json
 
 **A password step-up meets the account's own level** (lukk 0.7.0), as the passkey one already did. The confirmation token binds and removes authenticators, which NIST SP 800-63B-4 §4.1.2.1 puts at "the maximum AAL currently available in the subscriber account"; §2.2.3 lets an AAL2 session reauthenticate with one factor. So `confirm-password`:
 
-| Session (`amr` of the presenting token) | Account | Result |
+| Session (`amr` / `auth_time` of the presenting token) | Account | Result |
 |---|---|---|
-| carries `mfa` | any | accepted |
-| has no `amr` claim (minted before the `amr` column existed, or by a co-issuer) | any | accepted — the pre-0.7 rule |
-| single-factor (`amr` without `mfa`) | nothing stronger than the password | accepted |
-| single-factor (`amr` without `mfa`) | a confirmed TOTP, or a user-verifying passkey | **refused — `422` on `password`** |
+| carries `mfa`, signed in within `confirm.mfa_max_age` (one day) | any | accepted |
+| anything else — no `mfa`, an `mfa` sign-in older than `mfa_max_age`, or no `amr` claim at all | nothing stronger than the password | accepted |
+| anything else | a confirmed TOTP on a guard that enforces two-factor, or a user-verifying passkey | **refused — `422` on `password`** |
 
-In the refused case the session confirms with a passkey that verifies the user, or signs in again with its second factor first. Note that a single-factor passkey followed by a TOTP is `["pop","user","otp"]` — two possession factors, not `mfa` — so that session is refused here too. The refusal comes before the password is checked, so it spends no lockout attempt and says nothing about the password.
+In the refused case the session confirms with a passkey that verifies the user, or signs in again with its second factor first. Three cases are worth spelling out:
+
+- **A token with no `amr` counts as single-factor.** The claim goes missing in ordinary ways — a refresh on a schema without the [`refresh_tokens.amr` column](/upgrading#highest-impact-change-right-now), a session started by `$user->startSession()` (a magic link, a social login), a co-issuer's token — and treating its absence as "old rule" would let a password-only attacker wait one refresh. **Migrate the `amr` column**, or users with a second factor have to confirm with a passkey or sign in again after every refresh.
+- **`mfa` ages out.** §2.2.3 allows one-factor reauthentication *within* an AAL2 session, whose overall limit SHOULD be about a day, while `mfa` rides every rotation for the whole `refresh_ttl`. So the allowance lasts `confirm.mfa_max_age` (default `86400`) after the sign-in, read from the token's [`auth_time`](/tokens-and-rotation#the-auth-time-claim). Older sessions confirm with a passkey or sign in again.
+- **A single-factor passkey followed by a TOTP** is `["pop","user","otp"]` — two possession factors, not `mfa` — so that session is refused here too.
+
+An enrolled TOTP counts only where the guard enforces two-factor: with `features.two_factor` off, login never asks for the code, so no session there could carry `mfa` and the step-up would be locked away for good. The refusal comes before the password is checked, so it spends no lockout attempt and says nothing about the password. `Lukk::actingAs()`, which presents no token, keeps the old rule.
 
 #### With a passkey
 
@@ -100,7 +105,7 @@ Both endpoints return the same kind of `confirmation_token`. The credential is i
 
 Both endpoints are rate-limited (`rate_limits.confirm`, default **5 / 60s**; the passkey options route rides `rate_limits.passkeys`), keyed on **both** the user and the IP — the per-user bucket is the load-bearing one, since a caller holding a stolen access token is a single identity behind however many addresses they like. A tripped limit returns `429`.
 
-Password confirmation re-verifies the *same* secret as login, so it also counts toward the opt-in [account lockout](/account-lockout) under the `confirm` purpose; a locked step-up answers `423`, and a successful login or a password reset clears it. `confirm-passkey` is throttled but never locked — an assertion is a signature, not a guessable secret, so there's nothing to cap.
+Password confirmation re-verifies the *same* secret as login, so it also counts toward the opt-in [account lockout](/account-lockout) under the `confirm` purpose; a locked step-up answers `423`, and a successful login, a password reset or an accepted passkey step-up clears it — the last only after every check has passed, so a passkey refused for the account's level can't be alternated with password guesses to reset the count (lukk 0.7.0). `confirm-passkey` is throttled but never locked — an assertion is a signature, not a guessable secret, so there's nothing to cap.
 
 ### Gating your own routes
 
@@ -129,6 +134,7 @@ A request that reaches a gated route without a valid, fresh token receives `423 
 // config/lukk.php
 'confirm' => [
     'ttl' => (int) env('LUKK_CONFIRM_TTL', 300),
+    'mfa_max_age' => (int) env('LUKK_CONFIRM_MFA_MAX_AGE', 86400),
     'header' => env('LUKK_CONFIRM_HEADER', 'X-Lukk-Confirmation'),
 ],
 ```
@@ -136,6 +142,7 @@ A request that reaches a gated route without a valid, fresh token receives `423 
 | Key | Default | Description |
 |---|---|---|
 | `ttl` | `300` (5 min) | How long a confirmation token remains valid. |
+| `mfa_max_age` | `86400` (1 day) | **lukk 0.7.0.** How long after a multi-factor sign-in a [password step-up](#with-a-password) is still accepted on an account with a second factor. Read per guard. |
 | `header` | `X-Lukk-Confirmation` | The header the middleware reads the token from. |
 
 ## Client (Nuxt)

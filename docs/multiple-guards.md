@@ -53,7 +53,7 @@ A guard can harden itself — say, an admin guard with the [account lockout](/ac
 ],
 ```
 
-From lukk 0.7.0 `features.lockout`, the `lockout` block, `rate_limits.login.*` and `rate_limits.two_factor.*` are read **per guard**. Earlier releases read them from the global block, so an override like this was silently ignored.
+From lukk 0.7.0 `features.lockout`, the `lockout` block, `rate_limits.login.*` and `rate_limits.two_factor.*` are read **per guard**. Earlier releases read them from the global block, so an override like this was silently ignored. The same release reads these per guard too: `features.logout_all`, `features.two_factor` (where only an explicit `false`, `0` or `'0'` switches enforcement off), `email_verification.block_unverified_login`, `cookie_mode` when logout clears the cookie, `claim_seconds`, `login_timebox_micros` and `confirm.mfa_max_age`.
 
 Generate a per-guard secret:
 

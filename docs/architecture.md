@@ -112,6 +112,9 @@ Both packages enforce **100% test coverage** (statements, branches, functions, l
 - [RFC 8725 — JWT Best Current Practices](https://www.rfc-editor.org/rfc/rfc8725)
 - [RFC 9068 — JWT Profile for OAuth Access Tokens (`at+jwt`)](https://www.rfc-editor.org/rfc/rfc9068)
 - [RFC 9700 — OAuth 2.0 Security BCP](https://www.rfc-editor.org/rfc/rfc9700)
+- [RFC 7009 — Token Revocation](https://www.rfc-editor.org/rfc/rfc7009) (the logout semantics)
+- [RFC 6265bis — Cookies](https://datatracker.ietf.org/doc/draft-ietf-httpbis-rfc6265bis/) (why `SameSite` doesn't stop a cookie being *set*)
+- [OpenID Connect Core §2](https://openid.net/specs/openid-connect-core-1_0.html#IDToken) (`auth_time`)
 - [OAuth 2.1 (draft)](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/) · [OAuth 2.0 for Browser-Based Apps (draft)](https://datatracker.ietf.org/doc/draft-ietf-oauth-browser-based-apps/)
 
 **OWASP**
@@ -122,7 +125,7 @@ Both packages enforce **100% test coverage** (statements, branches, functions, l
 **Two-factor & passkeys**
 
 - [RFC 6238 — TOTP](https://www.rfc-editor.org/rfc/rfc6238) · [RFC 4226 — HOTP](https://www.rfc-editor.org/rfc/rfc4226) · [RFC 8176 — Authentication Method Reference (`amr`)](https://www.rfc-editor.org/rfc/rfc8176)
-- [W3C WebAuthn Level 2](https://www.w3.org/TR/webauthn-2/) · [NIST SP 800-63B](https://pages.nist.gov/800-63-3/sp800-63b.html)
+- [W3C WebAuthn Level 3](https://www.w3.org/TR/webauthn-3/) · [NIST SP 800-63B-4](https://pages.nist.gov/800-63-4/sp800-63b.html)
 
 **Libraries**
 

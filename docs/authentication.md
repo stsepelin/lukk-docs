@@ -68,6 +68,8 @@ The grace window (`grace_seconds`, default 30s) exists so concurrent refreshes d
 
 > [!NOTE]
 > In [cookie mode](#output-modes), the refresh token is read from the `__Host-refresh` cookie automatically, so the body carries no token — but send it as JSON (`Content-Type: application/json`, body `{}`): from lukk 0.7.0 a cookie-mode refresh that isn't JSON, and isn't `Sec-Fetch-Site: same-origin`/`none`, answers `415` (see [Output modes](#output-modes)).
+>
+> In **body mode** (`cookie_mode => false`) `/auth/refresh` reads the body only, never a cookie (lukk 0.7.0). It used to read a leftover `__Host-refresh` cookie in both modes, while the CSRF check above guards only cookie mode — so a cookie left over from cookie mode, or planted by a sibling subdomain, could be consumed by any cross-site form. The attacker never sees the new pair, but the victim's next refresh presents the rotated token, and past grace that revokes the session. Body mode never sets the cookie, so no working client is affected.
 
 The full token lifecycle — a short-lived access token used until it nears expiry, then rotated via the long-lived refresh token:
 
@@ -100,6 +102,14 @@ Up to lukk 0.6, `POST /auth/logout` also required a valid access token — so a 
 - the **refresh token** the client holds — the `__Host-refresh` cookie in cookie mode, or `refresh_token` in a JSON body — revokes the session it belongs to on that guard.
 
 An expired access token alone is **not** enough, whatever its signature. The answer is always `204`, so nothing reveals whether a token existed. The refresh cookie is only used — and only cleared — on a request a cross-site form can't make: `Content-Type: application/json`, or `Sec-Fetch-Site: same-origin`/`none` (the visitor's own navigation). Deliberately not `same-site`: that is the sibling-subdomain attacker `SameSite=Strict` doesn't stop, and it is also where a direct-mode SPA usually lives — which is why such a client sends an empty JSON body rather than relying on the header (lukk-js does). The refresh-token lookup has its own throttle. It counts lookups that find **no** token — probing always misses — and those for a session that's already revoked; a real logout of a live session never uses it up. The logout itself has no throttle, and a logout whose access token is valid skips the lookup's. When the lookup *is* throttled and nothing else ended the session, logout answers **`429`** with `Retry-After` and leaves the refresh cookie in place — retry it, because the session is still live.
+
+A few more details for code that reads the request or the outcome:
+
+- A body `refresh_token` is read from a **JSON** body only — never a form body or the query string.
+- A refresh token consumed past the grace window dispatches [`RefreshTokenReused`](/events#refreshtokenreused) and revokes its family, exactly as `/auth/refresh` would; one rotated inside grace ends the session, sibling included, without the event.
+- A valid access token with no `fid` (a co-issuer's) has its `jti` denylisted for the rest of its life, where logout used to do nothing for it.
+- With only a refresh token — or a valid access token whose user no longer exists — nobody is authenticated, so `$request->user()` is `null` in a rebound [`LogoutResponse`](/customization#reshaping-responses). The `Authenticate` middleware doesn't run on this route.
+- The refresh cookie is cleared per guard: a guard that opted into cookie mode gets its own `__Host-refresh-{guard}` cleared.
 
 ### Output modes
 

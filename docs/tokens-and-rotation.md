@@ -15,6 +15,7 @@ The access token is an HS256 JWT, valid for 15 minutes. It carries these claims,
 | `jti` | Unique token id — the denylist key for this individual token. |
 | `iat` / `nbf` / `exp` | Issued-at / not-before / expiry. |
 | `amr` | How the session was authenticated ([RFC 8176](https://www.rfc-editor.org/rfc/rfc8176)) — see below. |
+| `auth_time` | When the session was signed in (lukk 0.7.0) — see below. |
 
 Two more claims appear only when [abilities](/abilities) are in use: `scope` and `pin`.
 
@@ -34,6 +35,12 @@ Two more claims appear only when [abilities](/abilities) are in use: `scope` and
 
 `amr` is **stored with the session** (the `refresh_tokens.amr` column) and carried forward by every rotation. Up to 0.6 only the sign-in stamped it, so it vanished from the first refreshed access token, and a route gated on it stopped working about one `access_ttl` into each session. It is also **reserved**, like `scope` and `pin`: applied after the [`tokenClaimsUsing`](/customization#custom-token-claims) merge, so a claims hook can neither forge a method the session never used nor erase the real one.
 
+### The `auth_time` claim
+
+`auth_time` (lukk 0.7.0, [OpenID Connect Core §2](https://openid.net/specs/openid-connect-core-1_0.html#IDToken)) is the Unix time the session was **signed in**, not when this access token was minted. It is stamped at sign-in and recomputed on every rotation from the family's fixed expiry (`expires_at − refresh_ttl`), so it needs no column — which also means changing `refresh_ttl` shifts the `auth_time` of every existing session by the difference (lowering it makes them look more recent). Like `amr` it is **reserved**: a claims hook can neither set it nor remove it.
+
+Use it to age out decisions that `amr` alone would make for the whole 30-day refresh life. lukk does so itself: a password [step-up](/confirmation#with-a-password) leans on `mfa` only for [`confirm.mfa_max_age`](/configuration#confirmation) (one day) after `auth_time`, since NIST SP 800-63B-4 §2.2.3 lets an AAL2 session reauthenticate with one factor while it *is* an AAL2 session, whose overall limit SHOULD be about a day.
+
 It's **stateless**: the guard verifies it by checking a signature and these claims, with no database lookup for the token itself.
 
 ### Algorithm pinning
@@ -47,7 +54,7 @@ Every request asserts the security-relevant claims:
 - `iss` and `aud` must match your configuration — a token minted for another service won't verify.
 - `exp` is required and enforced; `nbf`/`iat` are honored when present.
 - The `typ=at+jwt` header is **stamped and asserted** — a 2FA/step-up *challenge* token (same key, `iss`, and `aud`) is therefore rejected when presented as a bearer.
-- The denylist is checked by both `jti` and `fid`, so a single revoked token or a whole revoked session is caught.
+- The denylist is checked by both `jti` and `fid`, so a single revoked token or a whole revoked session is caught. Both must be scalars, like `exp` and `sub` (lukk 0.7.0): a co-issuer token carrying `"jti": ["a","b"]` used to cast to the literal `Array`, which no longer matched its family's denylist entry (RFC 8725 §3.11).
 
 ### HS256 by default
 
@@ -73,11 +80,12 @@ POST /auth/refresh (opaque refresh token RT):
   in a transaction:
     row = SELECT ... WHERE token_hash = h FOR UPDATE
     if no row              -> 401 invalid
-    if row.revoked_at      -> revoke family; 401   (a killed token was presented; no event)
+    if row.revoked_at      -> 401 revoked          (its family's revoke already ran; nothing written, no event)
     if row.expires_at past -> 401 expired
     if row.rotated_at:
         if within grace    -> mint a fresh successor sibling, same family (a straggler; no logout)
         else               -> revoke family; 401   (post-grace replay = theft; RefreshTokenReused)
+    if denylist has fid    -> revoke family again after commit; 401   (a revoke is in flight)
     # happy path:
     mark row rotated; insert successor in the same family
   mint a new access token
@@ -93,7 +101,7 @@ flowchart TD
     B -- yes --> N{claim_seconds on,<br/>row would be accepted,<br/>claim window passed?}
     N -- yes --> U[revoke family<br/>outside the transaction] --> V[401 unclaimed · SessionUnclaimed]
     N -- no --> C{revoked?}
-    C -- yes --> KR[revoke family + denylist fid<br/>after commit] --> R0[401 · no event]
+    C -- yes --> R0[401 revoked<br/>nothing written · no event]
     C -- no --> D{expired?}
     D -- yes --> X2[401 expired]
     D -- no --> E{already rotated?}
@@ -109,7 +117,9 @@ The family is revoked **after** the transaction commits, never inside it — rev
 
 Rotation alone isn't the point; reuse detection is what makes it worth doing. When a token that has **already been consumed** is presented after the grace window, that's the signature of a stolen token being replayed — so lukk revokes the **entire family** and denylists it by `fid`, killing every live access token for that session within one `access_ttl`. It also dispatches [`RefreshTokenReused`](/events) so you can alert on it.
 
-That event fires **only** for a genuine replay — a consumed token presented past the grace window. Presenting a token that was already revoked — the ordinary case of a client retrying with one it still held across a logout — still force-revokes the family and still returns `401`, but is not reported as reuse: it isn't evidence of theft, and a steady drip of benign events would bury the alarm that is.
+That event fires **only** for a genuine replay — a consumed token presented past the grace window. Presenting a token that was already revoked — the ordinary case of a client retrying with one it still held across a logout — returns `401` with reason `revoked`, but is not reported as reuse: it isn't evidence of theft, and a steady drip of benign events would bury the alarm that is.
+
+From lukk 0.7.0 such a token also **does no work**. Its row carries `revoked_at`, so its family's revoke has already run; re-revoking it wrote the denylist and two `UPDATE`s on every presentation, which made one dead token replayed at an unauthenticated route a write amplifier. The one case still revoked again is a *live* row whose family is already on the denylist — a revoke still in flight — so the successor it just inserted is caught after commit.
 
 ## The grace window
 

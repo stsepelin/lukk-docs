@@ -53,6 +53,8 @@ In this order, and the order is the substance:
 > the `idn:` space is reachable only through the identifier — read it after the row is gone and those
 > rows are unreachable forever, still naming someone who asked to be forgotten.
 
+Passkeys are erased through whatever [`PasskeyRepository`](/customization#available-contracts) is bound, and the export reads them the same way (lukk 0.7.0). Earlier releases checked for a table literally named `passkeys` first, so a store that isn't that table — Redis, another service, a renamed model — was skipped: erasure reported success while the passkeys survived, and the export omitted them. A replacement store must therefore answer an empty or not-yet-provisioned store with `0` and `[]` rather than throw.
+
 Steps 2 and 3 are ordered deliberately too. Revoking first means a failure later leaves the account
 **unreachable** rather than half-erased and still usable. And running everything else in one
 transaction means a partial erasure can't happen — an account with no credentials that still exists

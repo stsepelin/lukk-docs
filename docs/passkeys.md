@@ -106,7 +106,7 @@ sequenceDiagram
 
 The challenge is server-generated, single-use, and held server-side (in the cache) — it never travels inside a JWT. Redemption **claims** it with an atomic cache `add()` keyed on the challenge value (lukk 0.7.0), so of two concurrent requests presenting the same ceremony exactly one wins; `Cache::pull()`, which it replaced, is a get followed by a forget. The claim is atomic only on a store that implements `add()` natively (Redis, Memcached, database, file, DynamoDB) — not APC or the array store, where the cache falls back to get-then-put.
 
-The options carry a WebAuthn `timeout` equal to [`passkeys.challenge_ttl`](/configuration#passkeys), in milliseconds (lukk 0.7.0), so the browser stops prompting when lukk forgets the challenge. Without it the browser's own default — often five minutes — applied while lukk's challenge lasted two, and a slow PIN or biometric entry ended in "could not be verified".
+**Timing (lukk 0.7.0).** The options carry a WebAuthn `timeout` equal to [`passkeys.challenge_ttl`](/configuration#passkeys), in milliseconds, which now defaults to **300 seconds** (it was 120) — the WebAuthn L3 §15.1 recommendation for a ceremony that verifies the user, since a PIN, a biometric or a phone reached over hybrid transport routinely outlasts two minutes. Before, the options carried no `timeout`, so the browser's own default applied while lukk's challenge lasted two minutes, and a slow entry ended in "could not be verified". The server keeps the challenge **30 seconds longer** than the advertised `timeout`: the browser may close the prompt at exactly that moment (WebAuthn L3 §5.4, §5.5), and an assertion completed at the last second is still in transit. An explicit `LUKK_PASSKEY_CHALLENGE_TTL` is kept.
 
 ### When a passkey counts as multi-factor
 
@@ -155,6 +155,11 @@ Content-Type: application/json
 
 A refused step-up answers **`422` on `credential`**, like a failed verification — not `403`. On a step-up route `403` means the token itself may never confirm, and clients abandon the prompt on it; here only the credential fell short, and the password or another passkey still works. The route takes no TOTP code: a TOTP is possession, like the passkey, so it can't lift the step-up to AAL2.
 
+Two more checks apply to a step-up (lukk 0.7.0):
+
+- **The credential must belong to the signed-in account.** The step-up passes that account to the ceremony as the expected user handle (WebAuthn L3 §7.2 step 6), so an assertion whose `userHandle` names another account is refused. A non-discoverable key, which returns no user handle, still works.
+- **An accepted passkey clears the password-confirm [lockout](/account-lockout) only after every check has passed.** A step-up refused for the account's level used to clear it first, so alternating a refused passkey with password guesses reset the counter.
+
 ### Split-domain (BFF) deployments
 
 When your front-end and API live on different subdomains (`app.example.com` and `api.example.com`), set:
@@ -165,12 +170,13 @@ When your front-end and API live on different subdomains (`app.example.com` and 
 ### Security notes
 
 - Credential IDs are globally unique, and the COSE public key is **encrypted at rest**.
-- A regressing signature counter is rejected and dispatches `Events\PasskeyCloneDetected`, but a `0` counter is never flagged — synced passkeys (iCloud, Google, 1Password) always report `0`. The stored counter only ever moves forward (lukk 0.7.0): the write is conditional on the stored value being lower, so two concurrent assertions can't roll it back and let a clone presenting the higher value pass later.
+- A regressing signature counter is rejected and dispatches `Events\PasskeyCloneDetected`, but a `0` counter is never flagged — synced passkeys (iCloud, Google, 1Password) always report `0`. The stored counter only ever moves forward (lukk 0.7.0): the write is conditional on the stored value being lower, so two concurrent assertions can't roll it back and let a clone presenting the higher value pass later. And of two concurrent assertions presenting the *same* non-zero counter, only the one whose write wins passes — the other is refused as a clone, with the same event (WebAuthn L3 §6.1.1).
 - `rp_id` and `origins` are **required** when passkeys are enabled — lukk throws on an empty value rather than fall back to a weak default.
 - By default lukk **asks for user verification** at login (`user_verification` → `required`) — the authenticator must verify the user (biometric/PIN), not just their presence. Lower it to `preferred` only if you must support authenticators that can't verify the user (see [Configuration](/configuration#passkeys)). Whether a given login *was* multi-factor is read from the assertion, [not from this setting](#when-a-passkey-counts-as-multi-factor), and a step-up sets its own requirement.
 - Registration is verified against the COSE algorithms lukk advertised in the options (WebAuthn L3 §7.1), not a library default.
 - An undecryptable stored credential (a rotated `APP_KEY` without `app.previous_keys`, a corrupt row) reads as one that doesn't match, rather than a `500`.
-- Passkey storage sits behind `Contracts\PasskeyRepository` (`passkeys` table) and is swappable — see the [note on replacing it](/customization) under multiple guards.
+- The model hides `public_key` and `aaguid` from serialization (lukk 0.7.0), so `$user->passkeys` in a response no longer publishes the COSE key or the AAGUID that fingerprints the authenticator's make and model.
+- Passkey storage sits behind `Contracts\PasskeyRepository` (`passkeys` table) and is swappable. A replacement must make `updateSignCount()` forward-only and answer an empty store on erasure, export and reset — see [Customization](/customization#available-contracts).
 - Credentials are **scoped to a guard** (a `guard` column, as of `0.6.0`). Under [multiple guards](/multiple-guards) the assertion lookup takes a credential id and no user, so without scoping an admin's authenticator could resolve on the users guard. Single-guard installs are unaffected and the column stays null.
 
 > [!WARNING]

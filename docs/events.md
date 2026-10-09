@@ -79,6 +79,8 @@ Event::listen(function (PasskeyCloneDetected $event) {
 
 The event carries `$userId` and `$credentialId`. A **zero** counter is never flagged — synced passkeys always report `0`.
 
+From lukk 0.7.0 it also fires for a non-zero counter that **did not advance** because another assertion got there first. Two concurrent assertions presenting the same counter used to both pass, since each read the stored value before either wrote it; the update is now forward-only and reports whether it won, and the loser is refused as a clone (WebAuthn L3 §6.1.1). The assertion is refused in either case.
+
 ### AccountLocked / AccountReleased
 
 When the opt-in [account lockout](/account-lockout) is on, `Lukk\Events\AccountLocked` fires the moment a consecutive-failure run hits the cap, and `Lukk\Events\AccountReleased` when a counter is cleared. Both carry `$purpose` (`login`, `two_factor` or `confirm`), `$subject`, and `$guard`:
@@ -127,7 +129,7 @@ Deliberately distinct from Laravel's `Illuminate\Auth\Events\PasswordReset` in t
 | `TwoFactorAuthenticationDisabled` | A TOTP secret, confirmed or pending, is removed. Not for an account that had none. | `$user` |
 | `RecoveryCodesGenerated` | A new set of recovery codes replaces the old. | `$user` |
 | `PasskeyRegistered` | A passkey is stored. | `$user`, `$credentialId`, `$name` (nullable) |
-| `PasskeyDeleted` | A credential was actually removed. | `$user`, `$credentialId` |
+| `PasskeyDeleted` | A credential was actually removed — by the user, or by a reset with [`revoke_passkeys`](/password-reset#session-revocation) on (one event per passkey). Not by [account erasure](/account-deletion). | `$user`, `$credentialId` |
 
 All five are in `Lukk\Events`, and `$user` is the resolved `Authenticatable`. Names follow Fortify's where one exists. Send the notice somewhere the attacker doesn't control — the account's email, not an in-app banner they can dismiss:
 

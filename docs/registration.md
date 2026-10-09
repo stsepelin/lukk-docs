@@ -98,7 +98,7 @@ Lukk::registerValidation(fn ($request) => [
 
 The default rules (`RegisterRequest`) are `name` (required), the identifier (a valid, **unique** address when it is `email`), and `password` (`confirmed`, at most 255 characters, meeting `Password::defaults()`). Tune password strength app-wide with `Password::defaults()` — see [Password policy](/security#password-policy).
 
-A hook **replaces** the default rules, so keep `HashablePassword::rule()` in yours: under bcrypt it refuses a new password longer than 72 bytes with a `422` (lukk 0.7.0). bcrypt reads only the first 72 bytes, so a longer password would be stored truncated and any string sharing that prefix would sign in (NIST SP 800-63B-4 §3.1.1.2); with Laravel's `hashing.bcrypt.limit` on it is a `500` instead. Other drivers pass untouched.
+A hook **replaces** the default rules, but lukk 0.7.0 still applies two password checks after yours: the password must be a string (an array used to `500` in the default create), and under bcrypt it may be at most 72 bytes — a `422` either way. bcrypt reads only the first 72 bytes, so a longer password would be stored truncated and any string sharing that prefix would sign in (NIST SP 800-63B-4 §3.1.1.2); with Laravel's `hashing.bcrypt.limit` on it was a `500` instead. Other drivers pass the length check untouched. Listing `HashablePassword::rule()` yourself, as above, is harmless.
 
 ### Username instead of email
 

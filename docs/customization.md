@@ -42,7 +42,9 @@ Lukk::authenticateUsing(function (Request $request) {
 > If your callback authenticates on a **different field**, set `lukk.username` to match it. The login throttle and the [account lockout](/account-lockout) both key on that field — with a mismatch the lockout never sees an identifier to count and silently does nothing.
 
 
-The login **throttle** still wraps your closure — failed attempts are rate-limited exactly as on the default path. **Constant-time** behaviour, however, becomes *your* responsibility: the package's unknown-user timing equalizer only runs on the built-in email/password path, so a closure that does `User::where(...)->first()` and hashes only when the user exists leaks a user-enumeration timing oracle. Make your closure take the same time whether or not the account exists — e.g. always run a `Hash::check` against a dummy hash when no user is found.
+The login **throttle** still wraps your closure — failed attempts are rate-limited exactly as on the default path — and so does the [sign-in timebox](/configuration#sign-in-timebox) (lukk 0.7.0): a failed attempt is padded to `login_timebox_micros` whatever your closure did. **Equal work** is still *your* responsibility, though: the package's unknown-user equalizer (one key derivation on every failing path) only runs on the built-in path, and the box pads a fast failure but never shortens a slow one. A closure that does `User::where(...)->first()` and hashes only when the user exists stays inside the box only while one hash is shorter than the budget — make it do the same work either way, e.g. always run a `Hash::check` against a dummy hash when no user is found.
+
+Two more things move to your side with a closure. lukk's re-read that shuts out a sign-in racing a [password change or reset](/security#login-responses) takes its baseline from the stored password read right *after* your callback returns (the model you return may not have it loaded), so a change landing before that read isn't caught. And the bcrypt 72-byte refusal at sign-in (see [Password policy](/security#password-policy)) is the built-in path's; your closure decides for itself.
 
 ## Custom token claims
 
@@ -57,7 +59,7 @@ Lukk::tokenClaimsUsing(fn ($userId) => [
 ```
 
 > [!NOTE]
-> Your claims are merged in, but the standard claims (`sub`, `exp`, `iss`, `aud`, `jti`, `fid`, …) always win and cannot be overridden. So do the reserved claims `scope`, `pin` and (from lukk 0.7.0) `amr`: a hook can neither forge an [authentication method](/tokens-and-rotation#the-amr-claim) the session never used nor erase the real one.
+> Your claims are merged in, but the standard claims (`sub`, `exp`, `iss`, `aud`, `jti`, `fid`, …) always win and cannot be overridden. So do the reserved claims `scope`, `pin` and (from lukk 0.7.0) `amr` and `auth_time`: a hook can neither forge an [authentication method](/tokens-and-rotation#the-amr-claim) the session never used nor erase the real one.
 
 ## Swapping the refresh token model
 
@@ -99,6 +101,11 @@ public function persist(
 ```
 
 PHP raises a fatal on a mismatched signature, so an implementation (or a `DatabaseRefreshTokenRepository` subclass overriding `persist()`) written for 0.6 fails at once rather than silently.
+
+Two behaviours the signatures can't express:
+
+- **`revokeUserFamilies()` / `revokeUserFamiliesExcept()` revoke by the ids they read**, never by the user again, and return exactly those ids. Revoking "every row for this user" in a second statement also catches a session that committed between the read and the update — under PostgreSQL READ COMMITTED or InnoDB — which is then revoked in the table but never denylisted or reported, and its user is signed out on the next refresh with nothing to show why.
+- **A revoked row is dead.** `revokeFamily()` is family-wide, so a record carrying `revokedAt` means that family's revoke has already run, and lukk does no further work when one is presented.
 
 ## Reshaping responses
 
@@ -157,12 +164,24 @@ Two more contracts describe your **user model** rather than a container binding:
 ```php
 public function authenticationOptions(string $challenge, array $allowCredentialIds, ?string $userVerification = null): array;
 
-public function verifyAssertion(array $response, string $challenge, PasskeyRecord $stored, ?string $userVerification = null): PasskeyAssertion;
+public function verifyAssertion(array $response, string $challenge, PasskeyRecord $stored, ?string $userVerification = null, int|string|null $owner = null): PasskeyAssertion;
 
 public function isMultiFactor(PasskeyRecord $stored): bool;
 ```
 
-**Enforce** `$userVerification` on the assertion, not only in the options — a step-up passes `required` when the account can reach AAL2. Report `multiFactor` true only when the assertion carries the UV flag **and** the credential was already `uvInitialized` before this ceremony; read that before verifying, because a WebAuthn library typically updates it as part of verification. lukk skips an enrolled TOTP on this answer. `isMultiFactor()` reports whether a stored credential has shown user verification, `false` when unknown. A mismatched method is a fatal when your class loads, so it surfaces on the first passkey request rather than at boot.
+**Enforce** `$userVerification` on the assertion, not only in the options — a step-up passes `required` when the account can reach AAL2. Report `multiFactor` true only when the assertion carries the UV flag **and** the credential was already `uvInitialized` before this ceremony; read that before verifying, because a WebAuthn library typically updates it as part of verification. lukk skips an enrolled TOTP on this answer. `isMultiFactor()` reports whether a stored credential has shown user verification, `false` when unknown. `$owner` is the account a step-up has already identified, or `null` at sign-in: pass it to your library as the expected user handle (WebAuthn L3 §7.2 step 6), so a returned `userHandle` naming another account is refused, and a non-discoverable key that omits it still works. A mismatched method is a fatal when your class loads, so it surfaces on the first passkey request rather than at boot.
+:::
+
+::: warning Implementing `PasskeyRepository` yourself (lukk 0.7.0)
+`updateSignCount()` returns `bool` — whether the row was written:
+
+```php
+public function updateSignCount(string $credentialId, int $signCount): bool;
+```
+
+Make the write **forward-only** and conditional — update only while the stored counter is below `$signCount` — and report whether it moved. Of two concurrent assertions presenting the same counter, exactly one may win; lukk treats the loser's non-zero counter as one that did not advance, refuses it and fires [`PasskeyCloneDetected`](/events#passkeyclonedetected), as WebAuthn L3 §6.1.1 directs. Always answering `true` silently loses that check; always answering `false` refuses every non-zero counter.
+
+**A rebound store is now called on every install.** Account [erasure](/account-deletion) (`deleteForUser()`), the [export](/account-deletion#the-export) (`summariesForUser()`) and a reset with [`revoke_passkeys`](/password-reset#session-revocation) (`summariesForUser()` + `delete()`) used to be skipped unless a table literally named `passkeys` existed, so a Redis or remote store was never reached: erasure reported success while the passkeys survived. They now call whatever is bound, so each method must answer an empty or not-yet-provisioned store without throwing — `[]` and `0`. The shipped `DatabasePasskeyRepository` answers an unpublished table itself, on its model's own connection and table name.
 :::
 
 ::: warning Replacing `PasskeyRepository` or `RefreshTokenRepository` under multiple guards

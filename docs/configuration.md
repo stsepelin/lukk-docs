@@ -57,7 +57,7 @@ The `iss` and `aud` claims stamped into every token and validated on every reque
 |---|---|---|
 | `grace_seconds` | `30` | The overlap window during which a just-rotated token is still tolerated, so concurrent refreshes (multiple tabs, SSR + hydration) do not trip reuse detection. Within this window the old token yields a full token pair — a sibling refresh token in the same session, which must be stored — see [Authentication → Refreshing tokens](/authentication#refreshing-tokens). |
 | `claim_seconds` | `0` (off) | **lukk 0.7.0.** A session a sign-in starts must be *claimed* within this window — by `POST /auth/session/claim`, an authenticated request to this lukk app, or a refresh. If it isn't, the first late use of the credential issued at sign-in revokes the whole session and fires [`SessionUnclaimed`](/events#sessionunclaimed). It ends sessions whose sign-in response never reached the client (a dropped connection, an aborted request), which otherwise stay alive until their refresh token expires. `600` suits most apps.<br><br>**The contract:** every client must claim within the window. lukk-js calls the claim route right after each sign-in. A client that uses its access token only on *another* service never touches this app, so it must call the route too. Only the original sign-in credential is ever revoked: a token minted by a later refresh counts as a claim. For a refresh token that is exact — the family's first row, the one with no predecessor — while an access token, which carries no lineage, is matched on its `iat` within a couple of seconds of the sign-in. The window is never shorter than `access_ttl` + `leeway`, or 60 seconds. Sessions with a pinned grant (personal access tokens, impersonation) are never marked. A replacement `RefreshTokenRepository` must return [`original`](/customization#swapping-storage) on its records (or, less precisely, `createdAt`); with neither, a late original refresh token isn't recognised (it fails open, with a warning logged once per worker process). Markers live in the denylist cache: losing them fails open, and restoring an old snapshot can at most revoke a session still presenting its original refresh token after the window. Costs one cache read per authenticated request when on, none when off. |
-| `leeway` | `5` | Clock-skew tolerance, in seconds, applied when validating the `exp` and `nbf` claims. Capped at `300` (five minutes) from lukk 0.7.0 — RFC 7519 §4.1.4 allows "some small leeway" — so a larger value acts as `300`. |
+| `leeway` | `5` | Clock-skew tolerance, in seconds, applied when validating the `exp` and `nbf` claims. Clamped to `0`–`300` (five minutes) from lukk 0.7.0 — RFC 7519 §4.1.4 allows "some small leeway" — so a larger value acts as `300`. The clamp covers every token lukk decodes: access tokens, two-factor challenges, step-up confirmations and passkey challenges, which with a large `LUKK_LEEWAY` used to stay valid for up to a day past expiry. Fix the clock skew rather than widening it. |
 
 ### Sign-in timebox
 
@@ -93,6 +93,8 @@ The configurable throttles live here, each shaped as `{ max_attempts, decay_seco
 | `refresh` | 30 / 60s | IP | Per-IP guard on `POST /auth/refresh`. |
 | `passkeys` | 30 / 60s | IP | Per-IP guard on the passkey login + assertion-options endpoints. |
 | `confirm` | 5 / 60s | account **and** IP | Guards [step-up confirmation](/confirmation) (`confirm-password`, `confirm-passkey`). Password confirmation re-checks the same secret as login, so the per-user bucket is the load-bearing one — a stolen token is one identity behind any number of addresses. |
+
+`login.*` and `two_factor.*` are read **per guard** from lukk 0.7.0, like `features.lockout` and the `lockout` block — an extra guard that tightened them in its [`lukk.guards`](/multiple-guards) block silently got the global values before. And a key missing from a degraded config (a `config:cache` taken before the key existed is never backfilled) falls back to the value `config/lukk.php` ships, never to a looser generic default: up to 0.6 a missing `confirm`, `email_verification` or `password_reset` limit fell back to 30 per minute, six times the shipped value.
 
 These bound a **rate**, not a run: the window keeps resetting, so `account_max_attempts` at 20/60s permits ~1,200 failures an hour indefinitely. The separate, opt-in [account lockout](/account-lockout) is what caps *consecutive* failures (NIST SP 800-63B §5.2.2).
 
@@ -165,12 +167,16 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
 ```php
 'guard' => 'api',
 'user_provider' => 'users',
+'username' => env('LUKK_USERNAME', 'email'),
+'guards' => [],
 ```
 
 | Key | Default | Description |
 |---|---|---|
-| `guard` | `api` | The auth guard your app maps to the `lukk-jwt` driver. Used by the package's route middleware. |
+| `guard` | `api` | The auth guard your app maps to the `lukk-jwt` driver. Used by the package's route middleware. An unset, null or empty value means `api` everywhere lukk reads it (lukk 0.7.0 — before, some readers took `''` as the guard name). A numeric name is refused at boot. |
 | `user_provider` | `users` | The `config/auth.php` user provider used to resolve and validate credentials during login. |
+| `username` | `email` | The identifier column for login and registration. Must be a plain column name not containing `password`; unset, null or empty falls back to `email`. See [Registration → Username instead of email](/registration#username-instead-of-email). |
+| `guards` | `[]` | Extra guards, each a `name => [overrides]` block — see [Multiple Guards](/multiple-guards). `false` or `''` mean none. A list of names, a numeric name or a truthy scalar is refused at boot with a message naming the problem (lukk 0.7.0). |
 
 ### Routes
 
@@ -182,7 +188,7 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
 | Key | Default | Description |
 |---|---|---|
 | `routes` | `true` | Whether to register the package's built-in routes. Set to `false` to define your own. |
-| `path` | `auth` | The URI prefix the routes are mounted under (e.g. `/auth/login`). |
+| `path` | `auth` | The URI prefix the routes are mounted under (e.g. `/auth/login`). A null value mounts at `auth`, not at the root (lukk 0.7.0). |
 
 ### Feature toggles
 
@@ -214,9 +220,9 @@ Rotation, reuse detection and the denylist are not switches: they are the securi
 
 | Feature | Default | Description |
 |---|---|---|
-| `logout_all` | `true` | Mount `DELETE /auth/sessions` ("log out everywhere"). Honoured from lukk 0.7.0; earlier releases ignored it. |
+| `logout_all` | `true` | Mount `DELETE /auth/sessions` ("log out everywhere"). Honoured from lukk 0.7.0, per guard; earlier releases ignored it. `false` makes the route a `404`. |
 | `two_factor` | `false` | Enable [two-factor authentication](/two-factor-authentication). Requires `pragmarx/google2fa`. Honoured per guard. Only `false`, `0` or `'0'` stops enrolled accounts from being challenged; an unset or blank value fails closed. |
-| `lockout` | `false` | Enable the [account lockout](/account-lockout) — the NIST SP 800-63B §5.2.2 consecutive-failure cap. Requires the `lukk-lockout-migrations` migration. |
+| `lockout` | `false` | Enable the [account lockout](/account-lockout) — the NIST SP 800-63B §5.2.2 consecutive-failure cap. Requires the `lukk-lockout-migrations` migration. Honoured per guard from lukk 0.7.0. |
 | `change_password` | **`true`** | Enable [change password](/change-password) (`POST /auth/password`). On by default — it needs no configuration. |
 | `passkeys` | `false` | Enable [passkeys](/passkeys). Requires a WebAuthn library. |
 | `email_verification` | `false` | Enable [email verification](/email-verification). |
@@ -253,6 +259,7 @@ Settings for [step-up confirmation](/confirmation).
 ```php
 'confirm' => [
     'ttl' => (int) env('LUKK_CONFIRM_TTL', 300),
+    'mfa_max_age' => (int) env('LUKK_CONFIRM_MFA_MAX_AGE', 86400),
     'header' => env('LUKK_CONFIRM_HEADER', 'X-Lukk-Confirmation'),
 ],
 ```
@@ -260,6 +267,7 @@ Settings for [step-up confirmation](/confirmation).
 | Key | Default | Description |
 |---|---|---|
 | `ttl` | `300` (5 min) | How long a confirmation ("sudo") proof remains valid. |
+| `mfa_max_age` | `86400` (1 day) | **lukk 0.7.0.** How long after a multi-factor sign-in (the token's [`auth_time`](/tokens-and-rotation#the-auth-time-claim)) a password step-up is still accepted on an account with a second factor. NIST SP 800-63B-4 §2.2.3 allows one-factor reauthentication within an AAL2 session, whose overall limit SHOULD be about a day; `mfa` alone would vouch for the whole `refresh_ttl`. See [Confirmation → With a password](/confirmation#with-a-password). Read per guard. |
 | `header` | `X-Lukk-Confirmation` | The request header that carries the confirmation token. Must match the client's [`confirmationHeader`](#confirmationheader). |
 
 ### Passkeys
@@ -271,7 +279,7 @@ Used only when `features.passkeys` is enabled. See [Passkeys](/passkeys).
     'rp_name' => env('LUKK_PASSKEY_RP_NAME'),
     'rp_id' => env('LUKK_PASSKEY_RP_ID'),
     'origins' => array_values(array_filter(array_map('trim', explode(',', (string) env('LUKK_PASSKEY_ORIGINS', ''))))),
-    'challenge_ttl' => (int) env('LUKK_PASSKEY_CHALLENGE_TTL', 120),
+    'challenge_ttl' => (int) env('LUKK_PASSKEY_CHALLENGE_TTL', 300),
     'user_verification' => env('LUKK_PASSKEY_UV', 'required'),
 ],
 ```
@@ -281,7 +289,7 @@ Used only when `features.passkeys` is enabled. See [Passkeys](/passkeys).
 | `rp_name` | `config('app.name')` | The relying-party name shown in the OS passkey prompt. |
 | `rp_id` | **required** | The registrable domain shared by your front-end and API — e.g. `example.com`, **not** `api.example.com`. Throws if unset when passkeys are enabled. |
 | `origins` | **required** | Allowed browser origins (your front-end), as a comma-separated `LUKK_PASSKEY_ORIGINS` value. An empty list is rejected. |
-| `challenge_ttl` | `120` (2 min) | How long a WebAuthn challenge is valid. |
+| `challenge_ttl` | `300` (5 min) | How long a WebAuthn ceremony may take. Sent to the browser as the options' `timeout` (in milliseconds); the server keeps the challenge 30 seconds longer, so an answer given at the last moment is still accepted in transit. lukk 0.7.0 raised the default from `120` to the WebAuthn L3 §15.1 recommendation for a user-verifying ceremony — [why](/passkeys#logging-in-with-a-passkey). |
 | `user_verification` | `required` | What a passkey **login** asks the authenticator for: verify the user (biometric/PIN), not just their presence. Lower to `preferred` only for authenticators that can't verify the user. One of `required`, `preferred`, `discouraged`. From lukk 0.7.0 it no longer decides whether a login counts as multi-factor — that is read from each assertion ([see why](/passkeys#when-a-passkey-counts-as-multi-factor)) — and a step-up sets its own requirement from the account's level. |
 
 ## Client (Nuxt)

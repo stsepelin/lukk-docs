@@ -107,6 +107,8 @@ LUKK_ALGORITHM=RS256          # match the auth service
 
 A lukk verifier reads that public key from its own config; it does **not** fetch a remote JWKS. The `/auth/jwks` endpoint is where you *publish* the key — copy it into the verify-only service's config, or point a non-lukk consumer (an API gateway, another framework) at the URL. Keys are addressed by `kid`, so you can rotate the signing key without forcing logouts: publish the new key alongside the old, migrate signing, then retire the old `kid` once its tokens have expired.
 
+Time the steps against caches. `/auth/jwks` answers `Cache-Control: public, max-age=3600`, so a consumer — or a CDN in front of it — may keep the old set for an hour. **Publish the new key at least an hour before you sign with it**, or tokens carrying the new `kid` are refused by every verifier still holding the old set. Retire the old `kid` no sooner than `access_ttl + leeway` after the switch, when the last token it signed has expired. A consumer that meets an unknown `kid` should refetch the set once (rate-limited) before refusing; a lukk verifier reads keys from its own config, so for it the order is: add the new public key to `keys.public` everywhere, deploy, then switch `LUKK_ACTIVE_KID` on the issuer.
+
 The alg is pinned from config and is **never** read from the token header — the alg-confusion defense. See [Configuration](/configuration) for the key settings and [Architecture](/architecture) for the design rationale.
 
 ```mermaid
