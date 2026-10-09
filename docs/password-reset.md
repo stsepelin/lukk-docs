@@ -69,7 +69,7 @@ These routes are registered only when `features.password_reset` is enabled. Both
 | `POST` | `/auth/forgot-password` | throttle | Email a reset link. Body `{ email }`. Always `200` (no enumeration). |
 | `POST` | `/auth/reset-password` | throttle | Set the new password. Body `{ token, email, password, password_confirmation }`. `200` on success, `422` on a bad/expired token or a weak/mismatched password. |
 
-The new password is validated with Laravel's `Illuminate\Validation\Rules\Password::defaults()`, so you can tune complexity rules app-wide the usual way — see [Password policy](/security#password-policy). Under bcrypt a new password over 72 bytes is a `422` (lukk 0.7.0).
+The new password is validated with Laravel's `Illuminate\Validation\Rules\Password::defaults()`, so you can tune complexity rules app-wide the usual way — see [Password policy](/security#password-policy). Under bcrypt a new password over 72 bytes is a `422`, and so is one that is not a string, whatever `Password::defaults()` returns (lukk 0.7.0).
 
 ### Session revocation
 
