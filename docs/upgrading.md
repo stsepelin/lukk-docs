@@ -16,8 +16,9 @@ impact tags. Read it (and the changelog) before bumping:
 - **Pin an exact version.** Don't float `^` on a `0.x` dependency you can't retest.
 - **Upgrade the server first.** lukk's HTTP contract is the source of truth; the client only
   speaks it. When a server change needs a matching client change, its `UPGRADE.md` entry says so.
-- **Nothing auto-applies.** lukk's migrations are [publish-only](/installation) and its behavior
-  is config-gated — an upgrade only touches what you've opted into.
+- **Schema changes don't auto-apply.** lukk's migrations are [publish-only](/installation), so a new
+  column reaches your database only when you add it, and new features are config-gated. Changes to how
+  existing routes behave *do* apply on upgrade — the entries below say which, and what to check.
 - **Run your tests** after bumping, then read the entries at or below your target version.
 
 ## Highest-impact change right now
@@ -42,9 +43,13 @@ impact tags. Read it (and the changelog) before bumping:
 >   longer goes through that contract.
 > - The route has no throttle, but the refresh-token lookup does, and a throttled one answers **`429`**
 >   with `Retry-After` rather than a `204` the client would read as "logged out".
+> - A body `refresh_token` is read from a JSON body only. A **consumed** refresh token presented past the
+>   grace window dispatches `RefreshTokenReused` and revokes its family, exactly as `/refresh` does.
 >
-> The full list, including the `AuthenticatedSessionController` constructor change, is in
-> [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md).
+> The full list is in [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md#upgrading-to-070-from-06x), including the constructor changes for anyone extending
+> the controllers: `AuthenticatedSessionController` takes `EndSession` instead of `RevokeSession` and a
+> trailing `ConfirmPasswordUnchanged`, and its `destroy()` no longer takes a `TokenVerifier`;
+> `TwoFactorChallengedSessionController` gains `ChallengeToken` and `ConfirmPasswordUnchanged`.
 
 > [!WARNING]
 > **lukk `0.7.0` changes the `amr` claim and how a passkey is trusted.** High impact if anything reads
@@ -113,7 +118,7 @@ lukk `0.7.0`'s smaller changes, each with what to check:
 
 | Change | Impact | What to do |
 |---|---|---|
-| A failed sign-in takes at least [`login_timebox_micros`](/configuration#sign-in-timebox) (500 ms), every `forgot-password` at least [`password_reset.timebox_micros`](/password-reset#setup) (one second). | Low | Raise either if your slowest real path takes longer — the box pads, it never shortens. Queue the reset notification. |
+| A failed sign-in takes at least [`login_timebox_micros`](/configuration#sign-in-timebox) (500 ms); every `forgot-password` and every failed `reset-password` at least [`password_reset.timebox_micros`](/password-reset#setup) (one second). A successful sign-in or reset returns early. | Low | Raise either if your slowest real path takes longer — the box pads, it never shortens. Queue the reset notification. |
 | [`leeway`](/configuration#refresh-behavior) is clamped to 0–300 s for every token lukk decodes. | Low | A larger `LUKK_LEEWAY` now acts as 300; fix the clock skew instead. |
 | [`passkeys.challenge_ttl`](/configuration#passkeys) defaults to 300 (was 120), is sent as the options' `timeout`, and the server keeps the challenge 30 s longer. | Low | None; an explicit `LUKK_PASSKEY_CHALLENGE_TTL` is kept. |
 | `ceremony_id` on passkey login and step-up must be the UUID lukk issued. | Low | A custom client sending anything else gets `422` on `ceremony_id`. |
@@ -123,7 +128,7 @@ lukk `0.7.0`'s smaller changes, each with what to check:
 | `features.logout_all` is honoured; `rotation` / `reuse_detection` / `denylist` are removed (never read). | Medium if you set `logout_all` to `false` | `false` now removes `DELETE /auth/sessions` (a `404`). Delete the three dead keys. |
 | `LockoutRepository` gained `summariesForSubjects(array $subjects, ?string $guard): array`, and erasure and export now call a rebound one whether or not a `lukk_lockouts` table exists. | Medium if you implement it | Mirror `forget()`: reach exactly the rows it deletes, scoped to the guard. Answer `0` and `[]` for nothing stored. The [export](/account-deletion#the-export) gains `lockouts`. |
 | `FinishPasskeyLogin` no longer clears the password-confirm lockout itself. | Medium if you call it from your own code | Call `releaseConfirmLock($passkey)` once you have granted what the assertion was for — and for a sign-in only on a multi-factor assertion. lukk's own routes [already do](/passkeys#security-notes). |
-| A success clears only the per-address login bucket; non-account lockout subjects are stored as `idn:sha256:<digest>`. | Low | None. Old locks keep their key and are still found by `lukk:release`, erasure and the export. |
+| A success clears only the per-address login bucket — the IP-independent `account_max_attempts` bucket decays instead of resetting — and non-account lockout subjects are stored as `idn:sha256:<digest>`. | Low | None, but a user who mistypes often may now meet `account_max_attempts` after a successful sign-in where before they would not. Old locks keep their key and are still found by `lukk:release`, erasure and the export. |
 | Per-guard `features.lockout`, `lockout.*`, `rate_limits.login.*` and `rate_limits.two_factor.*` are honoured. | Low | Check that an extra guard's [overrides](/multiple-guards) are what you want enforced — they now are. |
 | New [`password_reset.revoke_passkeys`](/password-reset#session-revocation) (off). | Low | Keep `revoke_sessions` on with it. |
 | Reset and change-password write the model's `getAuthPasswordName()` column. | Low | Remove any `password` mutator you added to work around the `500`. |
@@ -134,12 +139,24 @@ lukk `0.7.0`'s smaller changes, each with what to check:
 | Refresh rotation, bulk revocation and recovery-code redemption open their transaction on the model's own connection; erasure checks the broker's reset table on `auth.passwords.<broker>.connection`. | Low | None. If a [`useRefreshTokenModel`](/customization#swapping-the-refresh-token-model) model or your user model sits on another connection, rotation and redemption were not atomic before — upgrade. |
 | Confirm-password and change-password answer `422`, not `500`, when the stored hash is one the hasher refuses (another algorithm, a `$2b$` import with `hashing.bcrypt.verify` on). | Low | None — sign-in already failed that closed. |
 | [Account erasure](/account-deletion#what-erasure-actually-does) opens a transaction on every connection it writes to — the default one, the password broker's and the refresh-token store's — and `auth.passwords.<broker>.connection` may be an enum, backed or pure. | Low | None. With a `useRefreshTokenModel` model on another connection, a failed erasure used to keep the user and lose their credentials — upgrade. |
-| Access tokens whose `exp`, `iat` or `nbf` is not a timestamp between the epoch and the end of year 9999 are [rejected](/tokens-and-rotation#claim-validation); fractions and numeric strings stay valid. Challenge tokens take the same upper bound on `exp`. | Low unless a co-issuer mints tokens | Check that a co-issuer stamps real Unix times — a token it used to get through, only to `500` later, is now a `401`. |
+| Access tokens whose `exp`, `iat` or `nbf` is not a timestamp between the epoch and the end of year 9999 are [rejected](/tokens-and-rotation#claim-validation); fractions and numeric strings stay valid. Challenge tokens take the same upper bound on `exp`. A token whose `aud` is a JSON object is refused too (RFC 7519 §4.1.3). | Low unless a co-issuer mints tokens | Check that a co-issuer stamps real Unix times and a string or array `aud` — a token it used to get through, only to `500` later, is now a `401`. |
 | A [recovery code](/two-factor-authentication#recovery-codes) stored under a hasher the app has since left is no match, not a `500`. | Low | After switching hashers with `verify` on, have users regenerate their codes. |
-| Registration, [reset](/password-reset) and [change-password](/change-password) require the new password to be a string under every rule set, and registration's safety net (string, NUL, 72-byte) also runs for a rebound `RegisterRequest` subclass that overrides `rules()`. | Low | None — a JSON number or array password is a `422` on `password`. |
-| An `auth_time` may be fractional (floored) or a numeric string; a negative one is refused; [`confirm.mfa_max_age`](/configuration#confirmation) may be a float, so a "never" past the integer range no longer `500`s. | Low | None. |
+| Registration, [reset](/password-reset) and [change-password](/change-password) require the new password to be a string under every rule set, and registration's safety net (string, NUL, 72-byte) also runs for a rebound `RegisterRequest` subclass that overrides `rules()`. A sign-in identifier or password that is not valid UTF-8 is a `422` before any lookup. | Low | None — a JSON number or array password is a `422` on `password`. |
+| An `auth_time` may be fractional (floored) or a numeric string; a negative one is refused; [`confirm.mfa_max_age`](/configuration#confirmation) may be a float, so a "never" past the integer range no longer `500`s, and a non-numeric one reads as `0` (the multi-factor allowance off). | Low | None. |
+| [`POST /auth/password`](/change-password) on an account with an enforced TOTP or a user-verifying passkey requires a recent multi-factor session (`amr` carries `mfa`, signed in within `confirm.mfa_max_age`), as a password step-up does; otherwise `422` on `current_password`, before anything is checked. | Medium if users change passwords from password-only sessions | Have the user sign in again with their second factor first. Accounts with nothing stronger than a password are unaffected. |
+| Two-factor challenges carry `pwf`, a fingerprint of the password (an HMAC of the stored hash under `app.key`), and one whose password changed — or that carries none — is refused at redemption with a `422` on `challenge_token`, before the code is checked, so nothing is spent. | Medium in the minutes around the deploy, and for co-issuers | A challenge minted by 0.6 and redeemed after the upgrade is refused (the user signs in again), and so is a co-issuer's. Deployments that redeem each other's challenges must share `APP_KEY` (and `app.previous_keys` across a rotation). |
+| A malformed `lukk.guards` — a numeric guard name (there or as `lukk.guard`), a list of names, a truthy scalar — throws at boot naming the problem. | Medium if your config has one | Fix the config. `false` or `''` still mean "no extra guards". |
+| A per-guard `features.two_factor` that is `null` or `''` (an unset `env()`) now challenges enrolled accounts, and the challenge route mounts on the same rule. | Medium if an extra guard sets it from an unset `env()` | Set the flag explicitly (`false`) if you meant "off". |
+| `POST /auth/two-factor/confirm` on an account whose two-factor is already confirmed, and `POST /auth/two-factor/recovery-codes` on one with no two-factor (confirmed or pending), answer **`409`** instead of succeeding. | Low | None — neither changed anything a user needed. lukk-js passes them through as plain errors. |
+| The [export](/account-deletion#the-export)'s `passkeys[]` entries are `credential_id`, `name`, `created_at`, `last_used_at`, `aaguid`, `transports`, and every time is **ISO-8601** — `last_used_at` was a unix integer. | Medium if you parse the export | Parse the string. A rebound `PasskeyRepository` may return `created_at` (unix int), `aaguid` and `transports` from `summariesForUser()`; one that doesn't exports `null`. |
+| Per-guard `two_factor.challenge_ttl`, `confirm.ttl` and `confirm.header` are honoured. | Low | A guard with its own `confirm.header` needs its clients to send the confirmation there. |
+| Cookie mode: the refresh cookie's `Max-Age` is what is left of the session's absolute expiry, not a fresh `refresh_ttl` per rotation. `TokenPair` gained an optional `refreshExpiresAt`. | Low | None; code building a `TokenPair` itself can leave it out (the cookie then gets the full `refresh_ttl`). |
+| A negative `leeway` counts as zero everywhere — the denylist TTLs and the unclaimed-session window use the same clamped value as the verifier. | Low | None. |
+| `AccountLocked` can fire twice for one run (the identifier's fold and the account); `AccountReleased` fires only when a held lock is released. | Low if you notify or audit on them | Mail the owner only for `id:` subjects. A rebound `LockoutRepository` should fire `AccountReleased` for a held lock only. |
+| `PasswordChanged` and the authenticator events (`TwoFactorAuthenticationConfirmed`, `PasskeyRegistered`, …) use `SerializesModels`: a queued listener gets the user re-read when the job runs. | Low if you queue those listeners | A user deleted before then fails the job with `ModelNotFoundException`; copy what you need when queuing. |
+| An explicit `null` `lukk.path` (an unset `env()`) mounts the routes at `auth`, not at the root. | Low | Set the path you want explicitly. |
 
-See [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md) for the full text of each.
+See [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md#upgrading-to-070-from-06x) for the full text of each.
 
 > [!WARNING]
 > **lukk `0.6.0` adds a `guard` column to `passkeys`** and turns **account deletion on by default**.
@@ -163,109 +180,165 @@ See [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md) fo
 > core migration, no action for fresh or single-guard installs, and the identical backfill caveat in
 > both directions. See [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md#upgrading-to-040-from-03x).
 
-On the client side, `lukk-nuxt` **0.12.0** is the first release with anything to do on upgrade. Nothing
-was renamed or removed, but every composable now declares a real return type where the published
+On the client side, `lukk-nuxt` **0.12.0** (with `lukk-core` 0.12.0) is the first release with anything to
+do on upgrade. No runtime API was renamed or removed, but behaviour changed in ways an app can notice even
+without typechecking, and every composable now declares a real return type where the published
 declarations said `any`, so a typecheck that passed before can fail — most often on `user.value.name`,
 which needs a `LukkUser` augmentation. `LukkAuth` also becomes a global auto-imported type, and
 `lukk-auth` now defers rather than redirecting during a server render that couldn't identify the
 visitor. Each with its migration step in
 [lukk-js UPGRADE.md](https://github.com/stsepelin/lukk-js/blob/main/UPGRADE.md).
 
-The same release (with `lukk-core` 0.12.0) also changes:
+Changes that need a look:
 
-- **The `Amr` type** is `'pwd' | 'otp' | 'pop' | 'user' | 'mfa'`; `'webauthn'` is gone, to match lukk 0.7.0.
+- **Passkey sign-in can return a two-factor challenge, and `Amr` changed** (lukk 0.7.0). `useLukkPasskeys().login()`
+  resolves to a `LoginResult`: when lukk answers a single-factor passkey with a challenge, `pendingTwoFactor`
+  turns true and no user is loaded — show the same code form as after a password sign-in. `confirm()` uses
+  lukk 0.7.0's step-up options, falling back to the login options on a `404` from an older lukk. The `Amr`
+  type is `'pwd' | 'otp' | 'pop' | 'user' | 'mfa'`; `'webauthn'` is gone.
+- **`login()`, `register()` and passkey `login()` are typed for BFF mode.** There they resolve to the proxy's
+  `{ ok: true, expires_in }` — the new `BffSignInResult` — so they now return `LoginResult | BffSignInResult`
+  (`RegisterResult | BffSignInResult`). Reading `access_token` needs a narrowing first
+  (`'access_token' in result`, or `isTwoFactorChallenge`). See [lukk-core](/lukk-core#methods).
+- **The export's passkey times are strings** (lukk 0.7.0). `AccountExport.passkeys[]` gains the optional
+  `created_at`, `aaguid` and `transports`, and its `last_used_at` is an ISO-8601 string — it was unix seconds,
+  so `new Date(entry.last_used_at * 1000)` now fails to typecheck and gives `NaN` at runtime. `PasskeySummary`
+  from `GET /auth/passkeys` is unchanged: `last_used_at` is still a number (the declaration used to say
+  `string`). `AccountExport` also gains an optional `lockouts` array.
+- **New refusals from lukk 0.7.0, passed through as plain `LukkError`s** — no refresh, no retry, nothing
+  signed out: `useLukkTwoFactor().confirm()` rejects `409` (on `code`) when two-factor is already on,
+  `regenerateRecoveryCodes()` `409` (on `two_factor`) without two-factor, and
+  `useLukkChangePassword().changePassword()` can reject `422` on `current_password` from a session below the
+  account's step-up level (the remedy is signing in again with the second factor). A two-factor challenge
+  issued before the password changed is refused like an expired one; the user signs in again.
+- **`storage` is reserved.** It was read by nothing — BFF tokens always lived in the sealed session cookie.
+  Any value but `'cookie'` now fails the build; remove the option. For ended sessions shared across
+  instances, use [`session.sharedStore`](/configuration#session-sharedstore).
+- **Direct mode keeps its credentials out of `useState`.** The access token, the step-up token and a pending
+  2FA challenge are held on the Nuxt app, not in the `lukk:access`, `lukk:confirmation` and `lukk:challenge`
+  state keys, which are gone: `useState` is the payload, and Nuxt's chunk-reload persists it to
+  `sessionStorage`. Use the composables; `clearNuxtState()` no longer clears them — `logout()` does.
+- **The account calls resolve to `{ status }`.** `forgotPassword`, `resetPassword`, `changePassword` and
+  `sendEmailVerification` resolve to [`LukkStatus`](/lukk-core#methods) (`{ status: string }`) instead of
+  `void` — what lukk always sent.
 - **`refresh` hooks** are typed `() => Promise<RefreshOutcome>` and may return
-  [`REFRESHED_WITHOUT_TOKEN`](/lukk-core#renewed-without-a-token). `$lukkRefresh` resolves to that
-  symbol in BFF mode rather than the proxy's `{ ok, expires_in }`, and so does the `pair` of `$lukkRestore`'s result.
+  [`REFRESHED_WITHOUT_TOKEN`](/lukk-core#renewed-without-a-token). In BFF mode `$lukkRefresh()` resolves to
+  that symbol rather than the proxy's `{ ok, expires_in }` (code reading `.expires_in` gets `undefined`), and
+  so does the `pair` of `$lukkRestore`'s result. Both are truthy on success. `$lukkRestore` is typed in templates.
+- **Sign-in calls no longer refresh and retry on a `401`.** `login`, `register`, `twoFactorChallenge` and
+  `loginWithPasskey` reject with it — in lukk-core and in the BFF proxy. `logout()` keeps its refresh-and-retry
+  and accepts `{ retry: false }`; `logout({ refreshToken })` presents a body-mode refresh token, so lukk 0.7.0
+  ends the session even with an expired access token.
+- **`lukk-core`:** [`LukkError.retryAfter`](/lukk-core#errors) carries a numeric `Retry-After`, and the new
+  `retryAfterSeconds()` export reads one; app-API errors from `useLukkFetch` carry it too.
+
+The proxies refuse more:
+
 - **The app-API proxy answers `404` for lukk's own routes.** If your client reached lukk through
   `/api/...`, use the composables. If lukk sits at the root of `api.target`'s host, the proxy refuses
   everything — [move lukk under a prefix](/configuration#api-bff-app-api-proxy).
-- **Sealed sessions expire** after [`session.maxAge`](/configuration#session-maxage) (30 days); keep it at
-  least lukk's `refresh_ttl`. The auth proxy refuses bodies over [`bodyLimit`](/configuration#bodylimit)
-  (1 MiB) with `413`, and chunked bodies with `411`.
-- **`useLukkFetch` in direct-mode SSR** no longer sends the visitor's cookies to an absolute API base,
-  no longer trusts `Host` on the server, and keeps an `Accept` you set. See [useLukkFetch](/use-lukk-fetch).
-- **`useLukkForm` drafts** move to `lukk:form:<rememberKey>`; a draft under the old key isn't carried over.
-- **`useLukkPasskeys().confirm()`** uses lukk 0.7.0's step-up options, falling back to the login options
-  on a `404` from an older lukk.
-- **The BFF session cookie now persists** for [`session.maxAge`](/configuration#session-maxage) (30 days),
-  restarting on every write. It used to carry no `Max-Age`, so BFF users were signed out whenever the
-  browser closed; now they stay signed in like direct-mode users. A cleared session's cookie is deleted.
-- **The app-API proxy keeps CORS your app's own:** it drops the upstream's `Access-Control-*` and
-  hop-by-hop headers and removes `Origin` upstream. The headers it strips (`Origin`, `Cookie`, the
-  spoofable forwarding set, anything named in `Connection`) are now removed, not forwarded empty. A
-  header the browser itself sent empty is still forwarded as sent — `Accept` included, with
-  `api.forceJson` off.
-- **Both proxies refuse a `cross-site` or `same-site` GET that isn't a top-level navigation** (an `<img>`
-  pointing at them, say) with `403` — the app-API proxy now too, since it injects the bearer. Only
-  `Sec-Fetch-Dest: document` counts as top-level, so a navigation into an `<iframe>`, `<frame>`, `<embed>`
-  or `<object>` from another site is refused. Links the visitor follows still work.
-- **App-API responses carry `X-Content-Type-Options: nosniff`**, and any that is neither JSON nor a PDF
-  also `Content-Security-Policy: sandbox`, added to the upstream's own policy — an HTML or SVG document
-  from your API renders without script and outside the app's origin. Serve such documents from another
-  origin if they need to run script.
+- **…including behind a PHP front controller.** Any path segment ending in `.php` is read as one
+  (`/api/index.php/auth/login`, `/app/index.php/auth/login` under a sub-path), in the path and in `baseURL`
+  (`https://host/index.php/auth`), on every decoding round, with the tab, LF and CR a re-parsing hop strips
+  removed first; the path is judged as written too. It can't see how your server maps URLs to the script
+  (`SCRIPT_NAME` — shared hosting rewriting into `public/index.php`, Symfony trimming a URI containing
+  `index.php`) nor lukk's extra guard mounts on the same host: point `api.target` at a host or prefix that
+  does not serve lukk's routes at all. [Details](/transport-modes#authenticating-your-own-api-in-bff).
 - **The app-API proxy refuses a path that further percent-decoding turns into lukk's routes**
   (`/api/x/%252e%252e/auth/login`, `/api/%2561uth/login`, and one behind a decoded `?` or `#`) with
   `404` — and **any path in which decoding reveals a whole `.` or `..` segment**, wherever it leads:
   `/api/files/a%2F..%2Fb`, `/api/files/foo%2F.%2Fbar.txt`, `/api/..%2Fx`, `/api/a%5c..%5cb`, and one a
   tab, LF or CR splits (`.%2509.`). A dot inside a segment name (`v1.2`, `.well-known`, `..y`) is
   unaffected. Check that no real API path carries an encoded separator around a dot segment.
+- **Route checks collapse repeated slashes**, so `/api//auth/login` is refused like `/api/auth/login`.
+- **Both proxies refuse a `cross-site` or `same-site` GET that isn't a top-level navigation** (an `<img>`
+  pointing at them, say) with `403` — the app-API proxy now too, since it injects the bearer. Only
+  `Sec-Fetch-Dest: document` counts as top-level, so a navigation into an `<iframe>`, `<frame>`, `<embed>`
+  or `<object>` from another site is refused. Links the visitor follows still work.
 - **`/api/_lukk/refresh` accepts `POST` only**; anything else is `405` with `Allow: POST`.
-- **The 15-second upstream deadline** covers the auth proxy's own calls to lukk, body included, and the
-  background revoke of a dropped session — but **never a refresh**, which waits for lukk's answer: lukk
-  commits a rotation on receipt, so abandoning it would lose the new token and the next refresh, past
-  grace, would revoke the whole family (RFC 9700 §4.14.2). No request waits on a slow refresh for more
-  than 15 s either: `/api/_lukk/refresh` then answers `503` with `Retry-After: 5`, keeping the session
-  (lukk-nuxt's client retries once after it, standing down for a logout); a proxied or app-API call goes
-  ahead with the old access token; an SSR render leaves the session to the client. Every rotation is
-  [journalled](/transport-modes#a-slow-rotation) per session, from the token it consumed to the pair it
-  produced, and a request still presenting a consumed token is handed the chain's newest pair instead of
-  replaying it — ten minutes for a link nobody received, 30 s once its pair has reached the session,
-  counted from when the BFF received the pair, or from the first request adopting through it (so a hold
-  lasts at most 10 min + 30 s), and cut to 30 s when the rotation of the pair it handed out lands. After
-  that its end is only ever brought forward, never past the next link's. Every caller — the BFF's 401
-  retry, the app-API proxy, SSR hydration — re-checks the journal right before its cookie leaves and seals
-  the newest pair if the session rotated the one it was handed meanwhile (taking the links it follows, as
-  an adoption does) — or seals nothing, leaving the browser its newer cookie, if the session has moved past
-  it and the links that led on have expired (a response slower than the links' window: 30 s, up to
-  10 min 30 s for a rotation nobody received). For that the BFF remembers each session's newest refresh
-  token for five minutes after its last rotation, and forgets it on logout or replacement. On the
-  auth proxy's 401 retry (which gives up after 15 s) a stale pair is a backstop that only a journal
-  overflow reaches; a step-up confirmation answering there is not recorded: the auth proxy answers `409`
-  ("Your session was renewed meanwhile. Please confirm again.") and the user is asked to confirm again. A
-  session that ends while the app-API proxy or SSR hydration is re-sealing has that seal dropped — the
-  session cookie leaves no response — and the pair it sealed revoked. So the journal can answer a replay
-  up to a refresh's duration + 30 s after lukk rotated — past lukk's own grace window, on a slow refresh —
-  and those replays never reach lukk, so its reuse detection and `RefreshFamilyForked` don't see them.
-  Both are deliberate deviations (the second from RFC 9700 §4.14.2), bounded to these windows and traded
-  against a false logout. If the response carrying a pair is lost and its window closes first, the
-  browser's replay of the consumed token still revokes the session. An `expires_in` handed out after a slow refresh now counts from when
-  lukk minted the token. **The journal is per process**: behind a multi-instance BFF without sticky
-  sessions, use sticky sessions or raise lukk's grace window if lukk can be slow to rotate. A refresh that
-  never settles stops being shared after five minutes.
-- **`session.maxAge` must be a positive whole number of seconds.** Anything else fails the build (`0`
-  used to seal sessions that never expire), and a runtime override that isn't one makes every session
-  write throw.
+- **The auth proxy caps request bodies** at [`bodyLimit`](/configuration#bodylimit) (1 MiB): over it is
+  `413`, a chunked body without a length `411`. Every auth-proxy response carries
+  `X-Content-Type-Options: nosniff`, and a non-JSON upstream body goes out as `text/plain`.
+- **App-API responses carry `X-Content-Type-Options: nosniff`**, and any that is neither JSON nor a PDF
+  also `Content-Security-Policy: sandbox`, added to the upstream's own policy — an HTML or SVG document
+  from your API renders without script and outside the app's origin. Serve such documents from another
+  origin if they need to run script.
+- **The app-API proxy keeps CORS your app's own:** it drops the upstream's `Access-Control-*` and
+  hop-by-hop response headers and removes `Origin` upstream. The headers it strips (`Origin`, `Cookie`, the
+  spoofable forwarding set, anything named in `Connection`) are now removed, not forwarded empty. A
+  header the browser itself sent empty is still forwarded as sent — `Accept` included, with
+  `api.forceJson` off.
+
+Sessions and rotation:
+
+- **Sealed sessions expire** after [`session.maxAge`](/configuration#session-maxage) (30 days); keep it at
+  least lukk's `refresh_ttl`. A seal written before 0.12.0 has no lifetime until it is next re-sealed.
+  `session.maxAge` must be a positive whole number of seconds: anything else fails the build (`0` used to
+  seal sessions that never expire), and a runtime override that isn't one makes every session write throw.
+- **The BFF session cookie now persists** for `session.maxAge`, restarting on every write. It used to carry
+  no `Max-Age`, so BFF users were signed out whenever the browser closed; now they stay signed in like
+  direct-mode users. A cleared session's cookie is deleted.
+- **A refresh is never abandoned on a timer.** The 15-second upstream deadline covers the auth proxy's own
+  calls to lukk, body included, and the background revoke of a dropped session — but **never a refresh**:
+  lukk commits a rotation on receipt, so abandoning it would lose the new token and the next refresh, past
+  grace, would revoke the whole family (RFC 9700 §4.14.2). No request waits on a slow refresh for more than
+  15 s either: `/api/_lukk/refresh` then answers `503` with `Retry-After: 5`, keeping the session (lukk-nuxt's
+  client retries once after it, standing down for a logout); a proxied or app-API call goes ahead with the
+  old access token; an SSR render leaves the session to the client. A refresh that never settles stops being
+  shared after five minutes.
+- **Every rotation is [journalled](/transport-modes#a-slow-rotation), and its straggler window starts when
+  its cookie leaves.** A link from the consumed token to the pair it produced is recorded untaken and held
+  ten minutes; a request still presenting a consumed token is handed the chain's newest pair instead of
+  replaying it, and that takes nothing. The 30 s for stragglers start at **delivery** — when a caller's
+  cookie carrying the pair actually leaves: the auth proxy's `/refresh` and 401 retry, a step-up
+  confirmation, the app-API proxy when the upstream answers (or on its `502`), an SSR render when the page
+  is done — set outright on the first delivery, after that only ever brought forward, never past the next
+  link's end. An app-API request whose browser went away before the upstream answered delivers nothing,
+  so its link stays held. At delivery a caller seals the newest pair if the session rotated the one it was
+  handed — or, if the session has moved past it and the links that led on are gone, withholds its cookie
+  so the browser keeps the newer one: `/api/_lukk/refresh` and a step-up then answer **`409`** (the step-up
+  is not recorded, and the user confirms again). The BFF remembers each session's newest refresh token for
+  five minutes for that check. `expires_in` counts from when lukk minted the token.
+  **Two deliberate deviations**, bounded and traded against a false logout: the journal can answer a
+  replay up to 10 min 30 s after lukk rotated (a rotation whose cookie never left), or a slow response's
+  duration + 30 s — past lukk's own grace window — and those replays never reach lukk, so its reuse
+  detection and `RefreshFamilyForked` don't see them (RFC 9700 §4.14.2). **The journal is per process**:
+  behind a multi-instance BFF without sticky sessions, use sticky sessions or raise lukk's grace window.
+- **A page render's own requests never rotate the session.** A BFF server plugin marks the page request
+  (`x-lukk-ssr`, removed before a request reaches your API), so `useLukkFetch` and Nuxt's own
+  `useFetch('/api/…')`, `useRequestFetch()` and `event.$fetch` inside the render pass the token on as it is,
+  through the app-API proxy and the auth proxy alike (a marked `/refresh` answers `401`; a logout still
+  renews, to revoke). The session is renewed once, before the render — by SSR hydration, or with
+  `ssrHydrate: false` by a renew-only step that loads no user — so **with `ssrHydrate: false` an aged-out
+  page load rotates twice** (the server's renewal, then the client's restore), and both count against lukk's
+  per-IP refresh throttle. A server route's `event.$fetch('/api/…')` is not marked: read the session with
+  `getLukkAccessToken` there. [Details](/transport-modes#a-render-renews-the-session-once).
+- **A `withConfirmation()` still waiting for a step-up is cancelled** — it rejects — when the session ends by
+  logout or a sign-in replaces it. It retries once, instead of asking again, when a confirmation landed while
+  its request was out. A step-up that can never be earned (`403`) rejects the waiting action even when the
+  modal is a different `useLukkConfirmation()` instance. A 2FA challenge left from an earlier attempt is
+  dropped by any later sign-in, and when another tab changes the session.
+
+`useLukkFetch`, `useLukkForm` and the base path:
+
+- **`useLukkFetch` sends credentials only where it has checked they belong.** Its default is
+  `credentials: 'same-origin'`, upgraded per request; a call that passes its own `onRequest` (replacing
+  lukk's) or a per-call `baseURL` on another origin now goes out **without** the session cookie or
+  bearer and gets a `401`. Wrap the instance rather than replacing its hook. A relative path with an
+  explicitly empty `baseURL` goes to the page's origin and, in direct mode with an absolute API base, carries
+  no credentials unless the page is on the API's origin. [Details](/use-lukk-fetch).
+- **In direct mode `useLukkFetch` attaches the held step-up token** to requests on the API's own origin, as
+  it does the bearer, so `withConfirmation()` can reach a `lukk.confirm`-gated route of your API.
+- **Direct-mode SSR** no longer sends the visitor's cookies to an absolute API base, no longer trusts `Host`
+  on the server, and keeps an `Accept` you set.
+- **`useLukkForm`**: drafts move to `lukk:form:<rememberKey>` (a draft under the old key isn't carried
+  over); a cancelled submit rejects with the `AbortError` itself rather than ofetch's `FetchError`; `onFinish`
+  runs even when `onError` throws. [Details](/use-lukk-form#cancelling-a-submit).
 - **`user.endpoint` resolves under `app.baseURL` in BFF mode**, like the proxy mount it points at. In
   direct mode `useLukkFetch` no longer prefixes a relative `api.target` with the app's base. **Action
   needed** if you worked around the old behaviour with a base-prefixed *relative* endpoint:
   `'/admin/api/me'` under `app.baseURL: '/admin/'` now resolves to `/admin/admin/api/me` and `404`s,
   which signs everyone out on load. Drop the prefix (`'/api/me'`). An absolute endpoint keeps working.
-- **`useLukkFetch` sends credentials only where it has checked they belong.** Its default is
-  `credentials: 'same-origin'`, upgraded per request; a call that passes its own `onRequest` (replacing
-  lukk's) or a per-call `baseURL` on another origin now goes out **without** the session cookie or
-  bearer and gets a `401`. Wrap the instance rather than replacing its hook. [Details](/use-lukk-fetch).
-- **A step-up that can never be earned** (`403`) now rejects the action waiting in `withConfirmation()`
-  with that `403` even when the modal is a different `useLukkConfirmation()` instance, instead of
-  "confirmation cancelled".
-- **`lukk-core`:** [`LukkError.retryAfter`](/lukk-core#errors) carries a numeric `Retry-After`;
-  `logout({ refreshToken })` presents the refresh token; `forgotPassword`,
-  `resetPassword`, `changePassword` and `sendEmailVerification` resolve to
-  [`LukkStatus`](/lukk-core#methods) (`{ status: string }`) instead of `void`. `$lukkRestore` is typed
-  in templates.
 - **Packaging:** `LUKK_BFF_PREFIX` and `LUKK_SESSION_COOKIE` import as values again
   (`import { LUKK_BFF_PREFIX } from 'lukk-nuxt'` failed with TS1362), `h3` is a declared dependency,
   and the internal `refreshOnce` helper is no longer auto-imported into your server code.
-- **`useLukkPasskeys().login()`** resolves to a `LoginResult`. When lukk 0.7.0 answers a single-factor
-  passkey with a two-factor challenge, `pendingTwoFactor` turns true and no user is loaded: show the same
-  code form as after a password sign-in.

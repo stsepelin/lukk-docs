@@ -14,7 +14,7 @@ How you relax it depends on which [transport mode](/transport-modes) you run.
 | `nuxi dev --https` | `__Host-lukk-session` + `Secure` — mirrors production |
 | `nuxi build` / `nuxi preview` (production) | `__Host-lukk-session` + `Secure`, always |
 
-You don't configure anything. The decision is made at build from `nuxt.options.dev` and your dev-server https setting — **never from the request at runtime** (so there's no `x-forwarded-proto` to spoof), and the relaxed cookie is never part of a production build.
+You don't configure anything. The decision is made at build from `nuxt.options.dev` and your dev-server https setting — **never from the request at runtime** (so there's no `x-forwarded-proto` to spoof), and the automatically relaxed cookie is never part of a production build.
 
 - To **exercise the exact production cookie** locally, use `nuxi dev --https` (Nuxt generates a dev cert) or `nuxi preview` (a real production build).
 - For an unusual setup — e.g. `nuxi dev` (http) sitting behind your own TLS-terminating proxy — force it explicitly:
@@ -43,6 +43,6 @@ LUKK_COOKIE_SECURE=false
 
 ## Why not just always relax it?
 
-Because the `Secure` cookie is the actual protection — the refresh/session token must never travel over plain http where it can be intercepted. Both switches above are **development-only and default to secure**; the BFF one additionally can't reach a production bundle at all. The right fix for a real deployment is HTTPS, not a relaxed cookie — see [Deployment](/deployment).
+Because the `Secure` cookie is the actual protection — the refresh/session token must never travel over plain http where it can be intercepted. Both switches above are **development-only and default to secure**. The BFF's automatic relaxation never reaches a production build — but an explicit `cookieSecure: false` does: lukk-nuxt honours it there and only warns, so never ship it. The right fix for a real deployment is HTTPS, not a relaxed cookie — see [Deployment](/deployment).
 
 Next: **[Security](/security)**.

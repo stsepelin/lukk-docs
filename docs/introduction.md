@@ -3,7 +3,7 @@
 lukk is a small, focused authentication system for **first-party** applications — apps where you own both the client and the API, so there's no third party to delegate to. It has two halves that are designed and documented together:
 
 - **lukk** (Laravel) issues short-lived **access tokens** (signed JWTs) and long-lived, opaque, **rotating refresh tokens**, with reuse detection and instant revocation.
-- **lukk-js** (TypeScript / Nuxt) is the client that talks to it — attaching the bearer, refreshing before requests fail, surviving a 401, and driving the 2FA and passkey ceremonies.
+- **lukk-js** (TypeScript / Nuxt) is the client that talks to it — attaching the bearer, refreshing on a 401 and retrying the request once, and driving the 2FA and passkey ceremonies.
 
 lukk-js mirrors lukk's HTTP contract in TypeScript and is [conformance-tested against a real lukk instance](/architecture#conformance), so the types you code against can't silently drift from the server.
 
@@ -22,7 +22,7 @@ If you need third-party sign-in (users authenticating *your* app against *someon
 
 | | |
 |---|---|
-| **Access token** | An HS256 JWT, valid for 15 minutes. Carries `iss`, `aud`, `sub`, `fid` (refresh family id), `jti`, `iat`, `nbf`, `exp`, with the header `typ=at+jwt`. On every request the algorithm is pinned, `iss`/`aud` are asserted, and the denylist is checked by both `jti` and `fid`. |
+| **Access token** | An HS256 JWT, valid for 15 minutes. Carries `iss`, `aud`, `sub`, `fid` (refresh family id), `jti`, `iat`, `nbf`, `exp`, plus `amr` and `auth_time` (how and when the session signed in) where known, and `scope` / `pin` when [abilities](/abilities) are in use — with the header `typ=at+jwt`. On every request the algorithm is pinned, `iss`/`aud` are asserted, and the denylist is checked by both `jti` and `fid`. |
 | **Refresh token** | An opaque, 256-bit random string, valid for 30 days. Returned to the client once and stored only as a `sha256` hash. Rotated on every refresh; replaying one after the grace window revokes the whole token family. |
 
 HS256 (a shared secret) is the right default while your app is the only thing verifying its own tokens — no keypair to manage, no JWKS to publish. If an independent service ever needs to verify your tokens, RS256/ES256 + a JWKS endpoint + `kid` rotation are built in behind the same contracts: run `php artisan lukk:keygen`, flip `LUKK_ALGORITHM`, done. See [Deployment → Asymmetric keys](/deployment#asymmetric-keys).

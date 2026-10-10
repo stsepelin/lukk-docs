@@ -19,7 +19,7 @@ Built on: **[firebase/php-jwt](https://github.com/firebase/php-jwt)** (the sole 
 - **[Inertia.js](https://inertiajs.com)** — [`useLukkForm`](/use-lukk-form) is modelled on Inertia's `useForm`: the `data` / `processing` / `errors` / `isDirty` surface, `422` error-bag binding, and `remember` semantics all follow its lead.
 - **[Nuxt](https://nuxt.com)** — the module + auto-imported composable design, and the SSR/BFF story (a Nitro proxy holding tokens server-side) build directly on Nuxt's server/client model.
 - **[VueUse](https://vueuse.org)** — the reference for ergonomic, composition-first composable API shapes.
-- **[unjs](https://unjs.io)** — `lukk-core` and the BFF proxy are built on **[ofetch](https://github.com/unjs/ofetch)** and **[h3](https://github.com/unjs/h3)** / Nitro.
+- **[unjs](https://unjs.io)** — `lukk-nuxt` and its BFF proxy are built on **[ofetch](https://github.com/unjs/ofetch)** and **[h3](https://github.com/unjs/h3)** / Nitro. (`lukk-core` has no runtime dependencies: it uses the platform `fetch`.)
 
 ## This documentation
 

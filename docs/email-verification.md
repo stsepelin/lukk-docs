@@ -13,7 +13,7 @@ Verification state is Laravel's own `users.email_verified_at` column, and your u
 
 1. Your app creates the user and triggers the verification email (Laravel's `Registered` event, or `$user->sendEmailVerificationNotification()`).
 2. lukk points that notification at a **signed, expiring** URL on its own route (`GET /auth/email/verify/{id}/{hash}`).
-3. The user clicks it. lukk validates the signature + the `{id}`/`{hash}` binding, marks the email verified, fires `Illuminate\Auth\Events\Verified`, and **redirects to your SPA** (or returns `204` to a JSON client).
+3. The user clicks it. lukk validates the signature + the `{id}`/`{hash}` binding, marks the email verified, fires `Illuminate\Auth\Events\Verified`, and **redirects to your SPA** (or returns `204` to a JSON client, or to any client when no `frontend_url` is set).
 
 The verify link is a **browser navigation, not an XHR** — that's why the signature is the authority (no session or bearer needed) and why the endpoint lives outside lukk's JSON-forcing group so it can redirect.
 
@@ -50,8 +50,8 @@ These routes are registered only when `features.email_verification` is enabled.
 
 | Method | Path | Middleware | Purpose |
 |---|---|---|---|
-| `GET` | `/auth/email/verify/{id}/{hash}` | `signed` + throttle | The email-link target. Verifies, then redirects to `frontend_url` (browser) or returns `204` (JSON client). |
-| `POST` | `/auth/email/verification-notification` | `auth` + throttle | Resend the verification link to the authenticated user (`202`). |
+| `GET` | `/auth/email/verify/{id}/{hash}` | `signed` + throttle | The email-link target. Verifies, then redirects to `frontend_url` with `verified=1` appended (`?verified=1`, or `&verified=1` when the URL already has a query) for a browser, or returns `204` to a JSON client — and to a browser too when `frontend_url` is unset. A tampered or expired signature, an `{id}` that resolves to no user, or a `{hash}` that doesn't match the user's current email is `403`. |
+| `POST` | `/auth/email/verification-notification` | `auth` + throttle | Resend the verification link to the authenticated user. Always `202` `{"status": "verification-link-sent"}` (`no-store`) — a no-op for a user who is already verified, or whose model isn't `MustVerifyEmail`. |
 
 Both are throttled by the `lukk-email-verification` limiter (the authenticated resend carries a second, per-user limit as well, so rotating source addresses can't mail-bomb one inbox) (`rate_limits.email_verification`).
 
@@ -87,7 +87,7 @@ By default an unverified user **logs in normally** and you gate the sensitive ro
 'email_verification' => ['block_unverified_login' => true],
 ```
 
-Now login returns **403** for an unverified `MustVerifyEmail` user and issues no tokens. The check runs only *after* a successful credential check, so it never affects the constant-time unknown-user / wrong-password path.
+Now login returns **403** for an unverified `MustVerifyEmail` user and issues no tokens. So do the other session-minting routes: a [passkey login](/passkeys#logging-in-with-a-passkey) and the [two-factor challenge](/two-factor-authentication#logging-in-with-2fa) answer `403` for an unverified account, and [registration](/registration) answers `201` with no session. The check runs only *after* a successful credential check, so it never affects the constant-time unknown-user / wrong-password path. On the two-factor challenge it runs after the second factor verifies — only then is the account known — so a challenge that outlived the account's verified state (an email change that cleared `email_verified_at`, or the flag switched on meanwhile) spends that recovery code before the `403`.
 
 > [!WARNING]
 > **Up to lukk 0.6, two-factor login bypassed this block.** The check ran after the two-factor challenge was issued, and the challenge route started a session without it — so an unverified user who had enrolled a second factor still got tokens. From 0.7.0 login refuses before issuing a challenge, and redemption refuses too.
@@ -96,7 +96,7 @@ Now login returns **403** for an unverified `MustVerifyEmail` user and issues no
 
 The email link points at the **API** and redirects to your **SPA** (`frontend_url`), so it works in both direct and BFF deployments without a cross-origin round-trip:
 
-- The user clicks the link → the browser navigates to the API → lukk verifies → redirects to `https://app.example.com/verify-email?verified=1`.
+- The user clicks the link → the browser navigates to the API → lukk verifies → redirects to `https://app.example.com/verify-email?verified=1`. Leave `frontend_url` unset and the click ends on the API's bare `204` instead, so set it whenever users click the link in a browser.
 - Your SPA verify page then refreshes the session / reloads the user so the "unverified" UI clears.
 
 > [!NOTE]
@@ -132,7 +132,7 @@ const { verified, sending, sendVerificationEmail, syncAfterVerify } = useLukkEma
 |---|---|---|
 | `verified` | `ComputedRef<boolean>` | Whether the loaded user is verified: `email_verified_at` is set, or a boolean `email_verified` is `true`. |
 | `sending` | `Readonly<Ref<boolean>>` | True while a resend is in flight — bind a button's `disabled` to it. |
-| `sendVerificationEmail()` | `() => Promise<void>` | Resend the link to the current user (a no-op server-side if already verified; throttled). |
+| `sendVerificationEmail()` | `() => Promise<void>` | Resend the link to the current user (a no-op server-side if already verified). Throttled: rejects with a `LukkError` (`429`) once the limit is spent. |
 | `syncAfterVerify()` | `() => Promise<void>` | Reload the user (used on the verify callback page). |
 
 `verified` reads the same `useLukkAuth().user` you already load, so your `user.endpoint` must expose `email_verified_at` (or a boolean `email_verified`) for it to reflect reality.

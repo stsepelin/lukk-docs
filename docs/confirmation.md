@@ -13,7 +13,7 @@ Some actions are sensitive enough that a valid session isn't sufficient — chan
 2. The client sends that token in a request header (default `X-Lukk-Confirmation`) on subsequent sensitive requests.
 3. The `lukk.confirm` middleware checks for a valid, fresh token **earned by the session presenting it**. If it is missing, expired, or belongs to another session, the route returns **423 Locked**.
 
-The window length is `confirm.ttl` (default 5 minutes). lukk's own [two-factor](/two-factor-authentication) and [passkey](/passkeys) management routes are protected this way.
+The window length is `confirm.ttl` (default 5 minutes). lukk's own [two-factor](/two-factor-authentication) and [passkey](/passkeys) management routes, and [account erasure and export](/account-deletion), are protected this way.
 
 ```mermaid
 sequenceDiagram
@@ -72,7 +72,7 @@ Content-Type: application/json
 |---|---|---|
 | carries `mfa`, signed in within `confirm.mfa_max_age` (one day) | any | accepted |
 | anything else — no `mfa`, an `mfa` sign-in older than `mfa_max_age` or dated in the future, or no `amr` claim at all | nothing stronger than the password | accepted |
-| anything else | a confirmed TOTP on a guard that enforces two-factor, or a user-verifying passkey | **refused — `422` on `password`** |
+| anything else | a confirmed TOTP on a guard that enforces two-factor, or a user-verifying passkey (with `features.passkeys` on) | **refused — `422` on `password`** |
 
 In the refused case the session confirms with a passkey that verifies the user, or signs in again with its second factor first. Three cases are worth spelling out:
 
@@ -80,7 +80,7 @@ In the refused case the session confirms with a passkey that verifies the user, 
 - **`mfa` ages out.** §2.2.3 allows one-factor reauthentication *within* an AAL2 session, whose overall limit SHOULD be about a day, while `mfa` rides every rotation for the whole `refresh_ttl`. So the allowance lasts `confirm.mfa_max_age` (default `86400`) after the sign-in, read from the token's [`auth_time`](/tokens-and-rotation#the-auth-time-claim). Older sessions confirm with a passkey or sign in again. An `auth_time` more than [`leeway`](/configuration#refresh-behavior) ahead of the clock is no recent sign-in either, and neither is one before the epoch or one that isn't a number at all. A fractional `auth_time`, which a co-issuer may stamp (a NumericDate, OIDC Core §2), counts as the second it falls in, and a numeric string is read as its number. That matters when you **lower `refresh_ttl`**: `auth_time` is derived as `expires_at − refresh_ttl`, so every session signed in before the change moves forward by the difference, and a weeks-old sign-in would otherwise pass as brand new. Those sessions need a fresh multi-factor sign-in (or a passkey) to step up; raising `refresh_ttl` only ages them sooner.
 - **A single-factor passkey followed by a TOTP** is `["pop","user","otp"]` — two possession factors, not `mfa` — so that session is refused here too.
 
-An enrolled TOTP counts only where the guard enforces two-factor: with `features.two_factor` off, login never asks for the code, so no session there could carry `mfa` and the step-up would be locked away for good. The refusal comes before the password is checked, so it spends no lockout attempt and says nothing about the password. `Lukk::actingAs()`, which presents no token, keeps the old rule.
+[Changing the password](/change-password#it-holds-the-account-s-step-up-level) applies the same rule (lukk 0.7.0), refusing on `current_password`. A passkey counts only with `features.passkeys` on for the guard. An enrolled TOTP counts only where the guard enforces two-factor: with `features.two_factor` off, login never asks for the code, so no session there could carry `mfa` and the step-up would be locked away for good. The refusal comes before the password is checked, so it spends no lockout attempt and says nothing about the password. `Lukk::actingAs()`, which presents no token, keeps the old rule.
 
 A stored hash the active hasher refuses — another algorithm, or a `$2b$` import with `hashing.bcrypt.verify` on — is a credential nobody can present, so it gets the ordinary `422` on `password`, not a `500`, as at sign-in. A password over 72 bytes against a bcrypt hash is answered with its own `422` on `password` — "Reset your password to continue" — after the check has run, since bcrypt could verify only its first 72 bytes and earlier releases stored it truncated. See [Password policy](/security#password-policy).
 
@@ -105,9 +105,11 @@ Both endpoints return the same kind of `confirmation_token`. The credential is i
 
 #### Throttling
 
-Both endpoints are rate-limited (`rate_limits.confirm`, default **5 / 60s**; the passkey options route rides `rate_limits.passkeys`), keyed on **both** the user and the IP — the per-user bucket is the load-bearing one, since a caller holding a stolen access token is a single identity behind however many addresses they like. A tripped limit returns `429`.
+Both endpoints are rate-limited by `lukk-confirm` (`rate_limits.confirm`, default **5 / 60s**), keyed on **both** the user and the IP — the per-user bucket is the load-bearing one, since a caller holding a stolen access token is a single identity behind however many addresses they like. The same bucket also meters [`POST /auth/password`](/change-password) and [`GET /auth/account/export`](/account-deletion). The passkey options route rides `rate_limits.passkeys` instead, per address only. A tripped limit returns `429`.
 
-Password confirmation re-verifies the *same* secret as login, so it also counts toward the opt-in [account lockout](/account-lockout) under the `confirm` purpose; a locked step-up answers `423`, and a successful login, a password reset or an accepted passkey step-up clears it — the last only after every check has passed, so a passkey refused for the account's level can't be alternated with password guesses to reset the count (lukk 0.7.0). `confirm-passkey` is throttled but never locked — an assertion is a signature, not a guessable secret, so there's nothing to cap.
+Password confirmation re-verifies the *same* secret as login, so it also counts toward the opt-in [account lockout](/account-lockout) under the `confirm` purpose; a locked step-up answers `423`. The counter is cleared by a successful password confirmation, a successful password sign-in, a [passkey sign-in](/passkeys#security-notes) that grants a session on a multi-factor assertion, a password change or reset, and an accepted passkey step-up — the last only after every check has passed, so a passkey refused for the account's level can't be alternated with password guesses to reset the count (lukk 0.7.0). `confirm-passkey` is throttled but never locked — an assertion is a signature, not a guessable secret, so there's nothing to cap.
+
+All three earning routes — `confirm-password`, `confirm-passkey` and `confirm-passkey/options` — also carry [`RequirePinnedAbility:lukk.account`](/abilities#lukk-s-own-routes): a [pinned](/abilities#derived-vs-pinned-grants) token without `lukk.account` gets `403` and can never earn a step-up. A human login is never refused by it.
 
 ### Gating your own routes
 
@@ -143,9 +145,9 @@ A request that reaches a gated route without a valid, fresh token receives `423 
 
 | Key | Default | Description |
 |---|---|---|
-| `ttl` | `300` (5 min) | How long a confirmation token remains valid. |
+| `ttl` | `300` (5 min) | How long a confirmation token remains valid. Read per guard (lukk 0.7.0). |
 | `mfa_max_age` | `86400` (1 day) | **lukk 0.7.0.** How long after a multi-factor sign-in a [password step-up](#with-a-password) is still accepted on an account with a second factor. Read per guard. |
-| `header` | `X-Lukk-Confirmation` | The header the middleware reads the token from. |
+| `header` | `X-Lukk-Confirmation` | The header the middleware reads the token from — the setting of the guard that authenticated the request (lukk 0.7.0; it used to be read from the global block). |
 
 ## Client (Nuxt)
 
@@ -162,6 +164,8 @@ const {
   withConfirmation, // <T>(action: () => Promise<T>) => Promise<T> — per-action modal flow
   cancel,           // () => void — abort a pending withConfirmation
   clear,            // () => void
+  record,           // ({ confirmation_token? }) => void — record a step-up earned by your own call
+  abandonIfUnearnable, // (error) => void — on a 403, end a pending withConfirmation with that error
 } = useLukkConfirmation()
 ```
 
@@ -171,7 +175,7 @@ When you confirm, the token is **automatically attached** in the `X-Lukk-Confirm
 
 Where the token lives depends on the [mode](/transport-modes):
 
-- **`direct`** — the token is stored in client state and the client attaches the header.
+- **`direct`** — the token is held on the Nuxt app (never in `useState`, which is serialised into the payload; lukk-nuxt 0.12.0) and the client attaches the header — to lukk's routes, and through [`useLukkFetch`](/use-lukk-fetch) to your own API's origin too (lukk-nuxt 0.12.0; before, a `lukk.confirm`-gated route of your API answered `423` forever in direct mode). Never to another origin.
 - **`bff`** — the proxy strips the token from the response and **holds it server-side**, injecting the header itself. The browser only sees `confirmed` flip to `true`; it never holds the confirmation credential.
 
 In `bff` mode this covers **both** proxies: the lukk auth routes *and* your own API through the [app-API proxy](/configuration#api-bff-app-api-proxy). So a route on your Laravel API gated with lukk's `lukk.confirm` middleware works through `useLukkFetch()` once `confirmed` is `true` — the token is injected from the sealed session, and a confirmation header sent by the browser is discarded rather than forwarded.
@@ -200,7 +204,7 @@ await confirmPassword(currentPassword)
 
 A wrong password throws a typed [`LukkError`](/lukk-core#errors) (`422`). So does a password step-up [refused for the account's level](#with-a-password) — a single-factor session on an account with a second factor — also a `422` on `password`; offer [passkey confirmation](#confirming-with-a-passkey) there, or a fresh sign-in with the second factor. A `422` telling the user to reset means their password is over 72 bytes under bcrypt — send them to [password reset](/password-reset). Call `clear()` to drop the confirmation early (it also clears on [logout](/authentication#logging-out-1)).
 
-In BFF mode, a confirmation can also reject with **`409`** when the session that asked for it was replaced by a sign-in (or ended by a logout, perhaps in another tab) while the request was out. The confirmation belonged to that session, so the proxy doesn't store it; re-confirm once the page shows the current session. As a backstop, a `409` ("Your session was renewed meanwhile. Please confirm again.") also answers a confirmation whose request had to be renewed with a pair the session had already moved past. The auth proxy's retry gives up after 15 s, inside every [rotation journal](/transport-modes#a-slow-rotation) link's window, so only a journal that overflowed meanwhile gets here. Nothing is sealed from it, and the browser keeps its newer session cookie. No client retries it: the user confirms again, and the step-up is recorded on the newer session (a passkey asks for a fresh assertion).
+In BFF mode, a confirmation can also reject with **`409`** when the session that asked for it was replaced by a sign-in (or ended by a logout, perhaps in another tab) while the request was out. The confirmation belonged to that session, so the proxy doesn't store it; re-confirm once the page shows the current session. If the session rotated while the step-up was out (another tab, a sibling request), the confirmation is recorded onto the session's newest pair (lukk-nuxt 0.12.0; it used to re-seal the tokens it arrived with). As a backstop, a `409` ("Your session was renewed meanwhile. Please confirm again.") answers a confirmation whose pair the session has moved past with no [rotation journal](/transport-modes#a-slow-rotation) link leading on. The auth proxy's calls give up after 15 s, inside every link's window, so only a journal that overflowed meanwhile gets here. Nothing is sealed from it, and the browser keeps its newer session cookie. No client retries it: the user confirms again, and the step-up is recorded on the newer session (a passkey asks for a fresh assertion).
 
 ### Confirming with a passkey
 
@@ -217,6 +221,7 @@ These actions require a held confirmation; without one, lukk responds `423 Locke
 
 - [Managing 2FA](/two-factor-authentication#managing-2fa) — enable, confirm, disable, regenerate recovery codes
 - [Registering or removing a passkey](/passkeys#managing-passkeys)
+- [Erasing or exporting the account](/account-deletion) — `useLukkAccount()` wraps both in the confirmation flow for you
 
 Two shapes, both supported.
 
@@ -250,7 +255,9 @@ const password = ref('')
 </template>
 ```
 
-`withConfirmation` drops a stale confirmation on the `423`, so it always re-prompts when the server genuinely requires one (rather than trusting an expired client flag). `cancel()` rejects the pending action. A `403` from the confirm call means the token can never earn a step-up — a [pinned](/abilities) machine token without `lukk.account` — so it ends the wait instead of leaving the modal open: the pending action rejects with that `403`, not "confirmation cancelled". That holds across instances (lukk-nuxt 0.12.0): the modal calling `confirmPassword()` and the page waiting in `withConfirmation()` are usually two `useLukkConfirmation()` calls, and the error is now held per app rather than per instance, so the page sees it. A pending action is also cancelled when its session ends — on `logout()` and on every sign-in (lukk-nuxt) — so a confirmation earned later, perhaps by another account on the same tab, can never run the old action unasked.
+`withConfirmation` drops a stale confirmation on the `423`, so it always re-prompts when the server genuinely requires one (rather than trusting an expired client flag). `cancel()` rejects the pending action. A `403` from the confirm call means the token can never earn a step-up — a [pinned](/abilities) machine token without `lukk.account` — so it ends the wait instead of leaving the modal open: the pending action rejects with that `403`, not "confirmation cancelled". That holds across instances (lukk-nuxt 0.12.0): the modal calling `confirmPassword()` and the page waiting in `withConfirmation()` are usually two `useLukkConfirmation()` calls, and the error is now held per app rather than per instance, so the page sees it. A pending action is also cancelled when its session ends — on `logout()` and on every sign-in (lukk-nuxt) — so a confirmation earned later, perhaps by another account on the same tab, can never run the old action unasked. And when a confirmation lands while the action's request is still out — earned by another action's modal — the `423` that request comes back with answers the request, not that confirmation: `withConfirmation` retries once with it instead of clearing it and asking again (lukk-nuxt 0.12.0).
+
+If you earn a step-up through a call of your own rather than `confirmPassword()` / `useLukkPasskeys().confirm()`, hand its result to `record()` so `confirmed` flips (and, in direct mode, the token is stored), and pass a failure to `abandonIfUnearnable()` so a `403` ends a pending `withConfirmation()` instead of leaving the modal open.
 
 #### Per-page (a section)
 

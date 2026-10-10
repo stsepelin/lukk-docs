@@ -29,7 +29,7 @@ Controllers are resource-oriented — one resource (or single-action `__invoke`)
 
 Customization is Sanctum-style, through three coordinated mechanisms:
 
-- the static **`Lukk`** hub with closure hooks — `authenticateUsing`, `tokenClaimsUsing`, `useRefreshTokenModel`, `actingAs`, `disableScheduling`;
+- the static **`Lukk`** hub with closure hooks — `authenticateUsing`, `tokenClaimsUsing`, `abilitiesUsing`, `rateLimitKeyUsing`, `registerUsing`, `registerValidation`, `deleteUserUsing`, `useRefreshTokenModel`, `actingAs`, `disableScheduling`;
 - **feature flags** in `config('lukk.features')` — 2FA and passkeys are opt-in and never autoloaded unless enabled;
 - **rebindable contracts** — bind your own implementation of any swap seam in a service provider.
 
@@ -52,7 +52,7 @@ flowchart TB
     Future[lukk-react · …] -.-> Core
 ```
 
-`lukk-core` knows the lukk contract and how to *speak* it. It knows nothing about storage, reactivity, or any framework. `lukk-nuxt` supplies those — Nuxt `useState`, route middleware, a Nitro proxy — by wiring the core's hooks. A future `lukk-react` would do the same with React state, reusing the entire core unchanged. This is why the core has zero runtime dependencies: it's pure contract plus plumbing.
+`lukk-core` knows the lukk contract and how to *speak* it. It knows nothing about storage, reactivity, or any framework. `lukk-nuxt` supplies those — Nuxt state, route middleware, a Nitro proxy — by wiring the core's hooks. A future `lukk-react` would do the same with React state, reusing the entire core unchanged. This is why the core has zero runtime dependencies: it's pure contract plus plumbing.
 
 ### The hooks seam
 
@@ -62,7 +62,7 @@ flowchart TB
 - `refresh` — produce a fresh pair on demand.
 - `getConfirmationToken` — supply the step-up token to auto-attach.
 
-A binding fills these in for its world. In `lukk-nuxt`'s direct mode they read/write SSR-safe `useState`; in BFF mode the Nitro proxy fills the same role server-side. Same core, different seam wiring. See [Using lukk-core](/lukk-core).
+A binding fills these in for its world. In `lukk-nuxt`'s direct mode they read and write tokens held on the Nuxt app, client-side only — never in `useState`, which Nuxt serialises into the payload and its chunk-reload persists to `sessionStorage` (lukk-nuxt 0.12.0); in BFF mode the Nitro proxy fills the same role server-side. Same core, different seam wiring. See [Using lukk-core](/lukk-core).
 
 ### One API, two transports
 
@@ -98,7 +98,7 @@ It doesn't stop at shapes — it completes the real ceremonies: a genuine TOTP c
 
 ## Quality gate
 
-Both packages enforce **100% test coverage** (statements, branches, functions, lines) — the same bar on both sides. Mutation testing gates both halves too — Stryker on `lukk-core` and `lukk-nuxt` at a break threshold of 100%, Pest's own mutation testing on the PHP package at a floor of 99 — because 100% coverage says every line ran, not that any test would fail if it behaved differently. Lint and type-checking run in CI alongside the coverage gate and the conformance suite. The Nuxt runtime is unit-tested through a lightweight `#imports` mock, so the tests run without booting Nuxt; the PHP suite runs on Testbench against an in-memory sqlite database.
+Both packages enforce **100% test coverage**: lukk-js on statements, branches, functions and lines (Vitest thresholds), lukk on lines (`pest --coverage --min=100`, which measures line coverage only). Mutation testing gates both halves too — Stryker on `lukk-core` and `lukk-nuxt` at a break threshold of 100%, Pest's own mutation testing on the PHP package at a floor of 99 — because 100% coverage says every line ran, not that any test would fail if it behaved differently. Lint and type-checking run in CI alongside the coverage gate and the conformance suite. The Nuxt runtime is unit-tested through a lightweight `#imports` mock, so the tests run without booting Nuxt; the PHP suite runs on Testbench against an in-memory sqlite database.
 
 ## References
 

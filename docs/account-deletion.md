@@ -4,13 +4,22 @@ The right to erasure (**GDPR Art. 17**) and the right of access (**Art. 15 / 20*
 signed-in user's own account.
 
 ```
-DELETE /auth/account          erase
-GET    /auth/account/export   everything lukk knows
+DELETE /auth/account          erase                  → 204, no-store
+GET    /auth/account/export   everything lukk knows  → 200 JSON, no-store
 ```
 
-Both need [step-up confirmation](/confirmation) **and** the `lukk.account.delete`
-[ability](/abilities). Erasure is irreversible and the export discloses everything lukk holds about
-someone, so authentication alone must not be enough.
+Both need [step-up confirmation](/confirmation), and a [pinned](/abilities#derived-vs-pinned-grants)
+token also needs the `lukk.account.delete` [ability](/abilities) — a derived grant (a human login) is
+never refused by that gate. Erasure is irreversible and the export discloses everything lukk holds
+about someone, so authentication alone must not be enough.
+
+| Route | Middleware |
+|---|---|
+| `DELETE /auth/account` | `auth` + `lukk.confirm` + `RequirePinnedAbility:lukk.account.delete` (no route throttle of its own) |
+| `GET /auth/account/export` | the same, plus `throttle:lukk-confirm` — the step-up budget, shared on purpose, so one confirmation can't be spent on bulk reads |
+
+Both mount on the **default guard only**; an [extra guard](/multiple-guards) gets the core session
+routes, not these.
 
 > [!WARNING]
 > **Step-up on its own does not keep a machine token out.** A confirmation is
@@ -86,7 +95,7 @@ Event::listen(AccountDeleted::class, function (AccountDeleted $event) {
 |---|---|---|
 | When | before anything is erased | after the commit |
 | Transaction | inside it — **throwing aborts the deletion** | outside it |
-| Carries | the intact user model | identifiers only |
+| Carries | `user` (the intact model) and `guard` | `userId`, `identifier` (the `lukk.username` value, or `null`) and `guard` |
 | For | erasing your own rows | telling someone else to erase theirs |
 
 `AccountDeleted` carries identifiers rather than the model on purpose: the row is gone, and handing
@@ -163,11 +172,22 @@ Everything lukk owns is still erased — only the row's fate changes.
   "generated_at": "2026-03-04T05:06:07+00:00",
   "account": { "id": 1, "identifier": "subject@example.com" },
   "sessions": [{ "session": "…", "created_at": "…", "last_rotated_at": "…", "revoked_at": null, "expires_at": "…" }],
-  "passkeys": [{ "credential_id": "…", "name": "Yubikey at HQ", "last_used_at": 1787391978 }],
+  "passkeys": [{ "credential_id": "…", "name": "Yubikey at HQ", "created_at": "2026-08-01T10:00:00+00:00", "last_used_at": "2026-08-22T09:12:58+00:00", "aaguid": "…", "transports": ["usb", "nfc"] }],
   "two_factor": { "enabled": true, "confirmed_at": "…" },
   "lockouts": [{ "purpose": "login", "attempts": 3, "locked_at": null, "first_failed_at": "2026-08-22T09:30:00+00:00", "last_failed_at": "2026-08-22T09:46:18+00:00" }]
 }
 ```
+
+`sessions` holds one entry per refresh-token row, not per session: every rotation writes a row, so a
+session that refreshed ten times appears ten times under the same `session` (its family id), each with
+its own times.
+
+Every time in the export is an ISO-8601 string. From lukk 0.7.0 each passkey also carries
+`created_at`, `aaguid` (the authenticator model) and `transports` — everything erasure destroys that
+describes the person, so Art. 15 discloses what Art. 17 deletes — and its `last_used_at` is ISO-8601
+too; it used to be unix seconds. The COSE public key and the sign counter stay out. Each entry is
+mapped through an allowlist, so a [`PasskeyRepository`](/customization#available-contracts) returning
+more cannot publish it; a store that doesn't supply the three new fields reports them as `null`.
 
 `lockouts` arrives with lukk 0.7.0: the [account-lockout](/account-lockout) counters held against the account, which erasure also deletes. It reports the purpose, the attempt count and ISO-8601 timestamps (`locked_at` is `null` while the counter is not locked) — never lukk's internal subject keys. A custom `LockoutRepository` must implement `summariesForSubjects()` to supply it — and, from lukk 0.7.0, it is called (with `forget()` on erasure) whether or not a `lukk_lockouts` table exists, so a store kept elsewhere no longer leaves a deleted account's counters behind or out of the export.
 

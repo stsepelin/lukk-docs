@@ -12,13 +12,17 @@ This is the security story of the whole endpoint, so it's worth stating plainly:
 
 An attacker holding a token already has the account until that token expires. If they could change the password with it, they'd have the account *forever* — and lock the real owner out. Requiring the existing password means the token alone isn't enough, and the real owner's reset flow still works.
 
-That's also why the endpoint is metered the same way the login route is. See [Throttling](#throttling).
+That's also why the endpoint is metered the same way [step-up confirmation](/confirmation) is — the same `lukk-confirm` budget and the same `confirm` lockout counter, not the login route's. See [Throttling](#throttling).
+
+### It holds the account's step-up level
+
+The new password **replaces an authenticator**, which NIST SP 800-63B-4 §4.1.2.1 prices at the maximum AAL the account has — and the current password is one factor. So from lukk 0.7.0 `POST /auth/password` runs the same check as a [password step-up](/confirmation#with-a-password): on an account with a confirmed TOTP (on a guard that enforces two-factor) or a user-verifying passkey, a session that is not a recent multi-factor one — `amr` without `mfa`, no `amr` at all, or an `mfa` sign-in older than `confirm.mfa_max_age` — is refused with **`422` on `current_password`**, even when the password is right. The refusal comes before the current password is checked, so it spends no lockout attempt and says nothing about the password. The remedy is signing in again with the second factor. An account with nothing stronger than the password is unaffected.
 
 ### Endpoint
 
 | Method | Path | Middleware |
 |---|---|---|
-| `POST` | `/auth/password` | `auth` + `throttle:lukk-confirm` |
+| `POST` | `/auth/password` | `auth` + [`RequirePinnedAbility:lukk.account`](/abilities#lukk-s-own-routes) + `throttle:lukk-confirm` |
 
 ```http
 POST /auth/password
@@ -38,8 +42,9 @@ Content-Type: application/json
 
 | Status | Meaning |
 |---|---|
-| `200` | Changed. |
-| `422` | Wrong `current_password`, mismatched confirmation, a new password that failed `Password::defaults()` or is not a string, or — under bcrypt — one over 72 bytes (lukk 0.7.0; see [Password policy](/security#password-policy)). A `current_password` over 72 bytes against a bcrypt hash gets its own message telling the user to reset: earlier releases stored it truncated, so it can't be checked in full. A stored hash the hasher refuses (another algorithm, a `$2b$` import with `hashing.bcrypt.verify` on) is a wrong `current_password` too, not a `500` (lukk 0.7.0). |
+| `200` | Changed. `{"status": "password-changed"}`, `no-store`. |
+| `403` | A [pinned](/abilities#derived-vs-pinned-grants) token without `lukk.account` (`WWW-Authenticate: Bearer error="insufficient_scope"`). A derived (human) token is never refused here. |
+| `422` | Wrong `current_password`; a session [below the account's level](#it-holds-the-account-s-step-up-level) (on `current_password`, lukk 0.7.0); mismatched confirmation, a new password equal to the current one, one that failed `Password::defaults()`, is not a string or contains a NUL byte, or — under bcrypt — one over 72 bytes (lukk 0.7.0; see [Password policy](/security#password-policy)). A `current_password` over 72 bytes against a bcrypt hash gets its own message telling the user to reset: earlier releases stored it truncated, so it can't be checked in full. A stored hash the hasher refuses (another algorithm, a `$2b$` import with `hashing.bcrypt.verify` on) is a wrong `current_password` too, not a `500` (lukk 0.7.0). |
 | `423` | The [account lockout](/account-lockout) is holding this account. |
 | `429` | The step-up throttle is spent. |
 
@@ -57,7 +62,7 @@ One edge worth knowing: a token carrying no `fid` — one minted by a co-issuer 
 
 ### Throttling
 
-It runs on the **same budget as [step-up confirmation](/confirmation)** — the `lukk-confirm` limiter (`rate_limits.confirm`, default 5/60s) and, when [`features.lockout`](/account-lockout) is on, the same `confirm` counter.
+It runs on the **same budget as [step-up confirmation](/confirmation)** — the `lukk-confirm` limiter (`rate_limits.confirm`, default 5/60s), which buckets both the caller's address and the authenticated user, so rotating addresses buys a stolen token nothing — and, when [`features.lockout`](/account-lockout) is on, the same `confirm` counter (a locked one answers `423` on `current_password`).
 
 That's deliberate. Both endpoints verify the same secret, so giving each its own allowance would simply mean twice as many guesses at one password.
 
@@ -128,7 +133,8 @@ async function submit() {
   }
   catch (e) {
     const bag = (e as LukkError).errors
-    // `current_password` for a wrong password; `password` for a rule failure.
+    // `current_password` for a wrong password (or a session below the account's level);
+    // `password` for a rule failure.
     if (bag) errors.value = Object.fromEntries(Object.entries(bag).map(([k, v]) => [k, v[0]!]))
   }
 }

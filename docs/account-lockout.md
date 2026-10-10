@@ -1,6 +1,6 @@
 # Account Lockout
 
-**NIST SP 800-63B §5.2.2** requires a verifier to limit **consecutive** failed authentication attempts on a single account to no more than **100**. lukk's [rate limits](/configuration#rate-limits) don't satisfy that clause — they bound a *rate*, not a *run*, and they decay — so lukk ships a separate, **opt-in** persistent counter that does.
+**NIST SP 800-63B-4 §3.2.2** (formerly SP 800-63B §5.2.2) requires a verifier to limit **consecutive** failed authentication attempts on a single account to no more than **100**. lukk's [rate limits](/configuration#rate-limits) don't satisfy that clause — they bound a *rate*, not a *run*, and they decay — so lukk ships a separate, **opt-in** persistent counter that does.
 
 It is off by default, and that is a deliberate security trade-off rather than an oversight: a hard lockout is a **denial-of-service primitive**. Anyone who knows an address can burn its budget on purpose and lock the owner out. Turn it on when the protocol requirement outweighs that, and read [Bounding the denial](#bounding-the-denial) before you do.
 
@@ -17,7 +17,7 @@ They solve different problems and lukk runs both:
 | Cleared by | Time, or a success | A **success** only (or an explicit release) |
 | Survives | Not a cache flush | A cache flush, a deploy, a restart |
 | Status | `429` | `423 Locked` |
-| Standard | Defense in depth | NIST SP 800-63B §5.2.2 |
+| Standard | Defense in depth | NIST SP 800-63B-4 §3.2.2 |
 
 The gap the lockout closes is concrete. lukk's IP-independent per-identifier cap (`account_max_attempts`) is 20 failures per 60 seconds — about **1,200 per hour**, indefinitely, because the window keeps resetting. A patient attacker never trips it and never runs out of guesses. A consecutive-failure cap does run out.
 
@@ -40,7 +40,7 @@ Then enable the feature:
 ],
 
 'lockout' => [
-    'max_attempts' => 100,   // LUKK_LOCKOUT_MAX_ATTEMPTS — §5.2.2 says no MORE than 100
+    'max_attempts' => 100,   // LUKK_LOCKOUT_MAX_ATTEMPTS — §3.2.2 says no MORE than 100
     'release_after' => 0,    // LUKK_LOCKOUT_RELEASE_AFTER — seconds; 0 = hold until released
 ],
 ```
@@ -54,7 +54,7 @@ Then enable the feature:
 
 `release_after` is the setting that decides what kind of feature this is, so choose it deliberately.
 
-**`release_after = 0`** is the strict §5.2.2 reading: a run broken only by a **success**. It is also the version an attacker can weaponize — lock an account and it stays locked until a human intervenes.
+**`release_after = 0`** is the strict §3.2.2 reading: a run broken only by a **success**. It is also the version an attacker can weaponize — lock an account and it stays locked until a human intervenes.
 
 **`release_after = 3600`** trades the strict reading for a decaying cap. 100 failures per hour is no longer "100 consecutive, ever" — but it *is* exactly **OWASP ASVS V2.2.1** ("no more than 100 failed attempts per hour on a single account"), a bar this package does not otherwise clear. **Most deployments should prefer this.** It is a 12× improvement on the throttle alone and the lock lifts itself.
 
@@ -73,9 +73,9 @@ Three authenticators get their own independent counter, distinguished by a `purp
 |---|---|---|
 | `login` | `idn:sha256:<digest of the normalized identifier>` always, **and** `id:<primary key>` when the identifier names an account — two counters, either of which locks | A failed `POST /auth/login` |
 | `two_factor` | The user id | A failed TOTP code at `POST /auth/two-factor-challenge` |
-| `confirm` | The user id | A failed password at `POST /auth/confirm-password` |
+| `confirm` | The user id | A failed password at `POST /auth/confirm-password`, or a wrong `current_password` at `POST /auth/password` ([change password](/change-password)) |
 
-`confirm` matters because [step-up confirmation](/confirmation) re-verifies the *same* password as login. Without it, a caller already holding an access token — a stolen one, an XSS'd one, a shared device — could keep guessing behind the sudo gate while the login route stayed capped. `POST /auth/confirm-passkey` is throttled but deliberately **not** locked: an assertion is a signature, not a guessable secret, so there is nothing to cap.
+`confirm` matters because [step-up confirmation](/confirmation) re-verifies the *same* password as login. Change password checks it too, and shares the `confirm` budget rather than getting its own — two allowances for guessing one password would just be a larger allowance; a locked one answers `423` on `current_password`. Without it, a caller already holding an access token — a stolen one, an XSS'd one, a shared device — could keep guessing behind the sudo gate while the login route stayed capped. `POST /auth/confirm-passkey` is throttled but deliberately **not** locked: an assertion is a signature, not a guessable secret, so there is nothing to cap.
 
 Every failed `login` counts against **two** counters (lukk 0.7.0): the identifier's normalized fold (trim, lowercase, transliterate) always, and the account's identity too when the identifier resolves to one. Either being locked refuses the attempt.
 
@@ -98,7 +98,7 @@ A locked-out user submitting a **recovery code** is not gated by a `two_factor` 
 
 The counter is incremented **before** the credential is verified, then compared against the cap. Reading "is it locked?" and counting afterwards is check-then-act: a burst of concurrent requests all pass the check together and all reach the password comparison, so the real number of verifications is `max_attempts` *plus* however many arrived at once. Reserving first makes the count authoritative at the moment it is taken.
 
-A successful authentication releases the reservation, so the counter still means "consecutive failures" from the outside — a correct password never costs an attempt.
+A successful authentication releases the reservation, so the counter still means "consecutive failures" from the outside — a correct password never costs an attempt. One exception: a correct password over 72 bytes against a bcrypt hash, which bcrypt could only verify in part, is answered with the [must-reset](/security#password-policy) `422` and keeps its attempt, since it was never fully checked.
 
 ## What a locked account sees
 
@@ -117,14 +117,15 @@ A successful authentication releases the reservation, so the counter still means
 
 Both messages are `__()`-wrapped, so publish `lang/en/auth.php` and add your own keys to change them.
 
-The lockout check runs **before** the rate limiter, so a locked account gets the `423` rather than a `429` that misdescribes its situation.
+The lockout check runs **before** the in-action limiter (the per-identifier login buckets), so a locked account gets the `423` rather than a `429` that misdescribes its situation. The route throttles run earlier still, as middleware — `lukk-login`'s per-IP cap, `lukk-confirm`, `lukk-2fa` — so a caller who has exhausted one of those gets its `429` first.
 
 ## Releasing a lock
 
-Four things clear a counter:
+Five things clear a counter:
 
 - **A successful authentication.** "Consecutive" is the whole point — any success ends the run and resets the count to zero. A successful **login** additionally clears a `confirm` lock: it proves the same password, and it's the self-service escape when someone locked step-up with a stolen token (they can't log in without the password, so this hands them nothing). A passkey clears it only on a step-up that passed every check, or a sign-in that granted a session on a [multi-factor assertion](/passkeys#when-a-passkey-counts-as-multi-factor) (lukk 0.7.0) — a presence-only key proves possession alone, and letting it clear the count would make password guesses with a stolen token unlimited.
 - **A password reset.** [Completing a reset](/password-reset) releases the `login` **and** `confirm` locks, keyed off the *resolved* user — after a reset, failures counted against the old password are meaningless. Without this, an attacker who locked an account could keep it locked even after the owner did the one thing that should restore access — the owner would be stuck with no path left but a support ticket.
+- **A password change.** A successful [`POST /auth/password`](/change-password) releases the account's `confirm` **and** `login` counters, for the same reason as a reset: the failures they hold were against a password that no longer exists, and reaching that point required proving the current one. Otherwise a user who noticed the attack and changed their password would stay locked out of login on every other device.
 - **`release_after` elapsing**, when you've set it. This one is lazy and read-only: the lock simply *reports* unlocked, and the row is reset by the next failure or dropped by [pruning](#pruning). Nothing is written on a read path (that would break on a replica), so **no `AccountReleased` fires** for an expiry.
 - **The console command**, for your support team:
 
@@ -145,7 +146,7 @@ Spent counters accumulate. `lukk:prune` — already [scheduled daily](/deploymen
 php artisan lukk:prune --lockout-days=30
 ```
 
-A **held** lock is never pruned, whatever its age — pruning must not quietly become a release path. What goes is the spent stuff: counters untouched for `--lockout-days`, and locks already past `release_after`.
+A **held** lock is never pruned, whatever its age — pruning must not quietly become a release path. What goes is the spent stuff: counters untouched for `--lockout-days`, and locks already past `release_after`. The sweep runs wherever the `lukk_lockouts` table exists, whether or not `features.lockout` is on now, so counters left from a time it was on still age out.
 
 ## Events {#events}
 
@@ -154,7 +155,9 @@ Both are dispatched on the **transition**, not on every attempt:
 | Event | When |
 |---|---|
 | `Lukk\Events\AccountLocked` | A consecutive-failure run just hit the cap. |
-| `Lukk\Events\AccountReleased` | A counter was cleared — by a successful authentication, a password reset, or `lukk:release`. Not by a `release_after` expiry (see [above](#releasing-a-lock)). |
+| `Lukk\Events\AccountReleased` | A **held** lock was lifted — by a successful authentication, a password reset or change, or `lukk:release`. Not for clearing a counter that never reached the cap, and not for a lock already past `release_after`, whose expiry announces nothing (see [above](#releasing-a-lock)). |
+
+Up to lukk 0.6 `AccountReleased` fired whenever a counter row was deleted, so every successful sign-in after a single typo told an audit log that a locked account had been unlocked. A rebound [`LockoutRepository`](#swapping-the-store) should follow the same rule: fire for a held lock only. `AccountLocked` can fire twice for one login failure — once for the identifier's fold, once for the account — when both reach the cap; only the `id:` subject names a user.
 
 Each carries `$purpose` (`login`, `two_factor` or `confirm`), `$subject`, and `$guard`. A locked-out user gets **no other signal** — they simply can't authenticate — so `AccountLocked` is where you send the "someone is trying to get into your account" mail, or a release link:
 

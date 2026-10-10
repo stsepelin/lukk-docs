@@ -12,7 +12,7 @@ lukk ships a first-party `POST /auth/register` that mirrors login: it creates th
 Registration reuses the exact login machinery. `POST /auth/register`:
 
 1. **Validates** the input (`RegisterRequest` — `name`, the identifier (`email` by default) and a confirmed password; customizable).
-2. **Creates** the user — via your `Lukk::registerUsing()` hook, or the default (the configured model with `email` + a hashed `password`).
+2. **Creates** the user — via your `Lukk::registerUsing()` hook, or the default (the configured model with `name` + the identifier + a `password` hashed with `Hash::make`).
 3. **Fires** `Illuminate\Auth\Events\Registered`, so — when `features.email_verification` is on and your model is `MustVerifyEmail` — the framework listener sends the (lukk-signed) verification link.
 4. **Responds** the same way login does:
    - a **token pair** (auto-login), honoring BFF vs cookie mode, or
@@ -54,16 +54,17 @@ Registered only when `features.registration` is enabled. Per-IP throttled by the
 
 **Responses** — identical to login, so a client treats a successful register exactly like a login:
 
-- **`200`** with a token pair (`{ access_token, refresh_token?, expires_in }`; `refresh_token` only in BFF/body mode).
+- **`200`** with a token pair (`{ access_token, refresh_token?, token_type: "Bearer", expires_in }`; `refresh_token` only in BFF/body mode).
 - **`200`** with `{ two_factor: true, challenge_token }` if the new user is already 2FA-enrolled — complete it at `/auth/two-factor-challenge`.
-- **`201`** with `{ registered: true, requires_verification }` and no tokens, when the account can't log in yet — either `registration.login` is off (sign in separately; `requires_verification: false`) or `email_verification.block_unverified_login` is on (verify first; `requires_verification: true`).
+- **`201`** with `{ registered: true, requires_verification }` and no tokens, when the account can't log in yet — either `registration.login` is off, or `email_verification.block_unverified_login` withholds the session. `requires_verification` answers one question whichever of the two applied: is the new account an unverified `MustVerifyEmail` user that `block_unverified_login` will refuse at login? `true` means "verify first"; `false` means "sign in separately". So with `registration.login` off *and* the block on, a new unverified user still gets `true`.
 - **`422`** on validation failure (including a duplicate identifier).
+- **`415`** in [cookie mode](/transport-modes) for a request a cross-site form could produce — anything that isn't `Content-Type: application/json` or `Sec-Fetch-Site: same-origin`/`none` — because the response sets the refresh cookie (see [Security → login CSRF](/security#login-responses)).
 
 All responses are `Cache-Control: no-store`.
 
 ### Customizing the user's fields
 
-Point `Lukk::registerUsing()` at a closure (or an invokable class-string) that creates and returns the new user. It receives the validated payload (with the **plaintext** `password` — hash it yourself) and must return a **brand-new** Authenticatable:
+Point `Lukk::registerUsing()` at a closure (or an invokable class-string) that creates and returns the new user. It receives the validated payload (with the **plaintext** `password` — **hash it yourself**: lukk hashes only in its own default create) and must return a **brand-new** Authenticatable:
 
 ```php
 use Illuminate\Support\Facades\Hash;
@@ -137,7 +138,7 @@ $this->app->bind(\Lukk\Contracts\RegisterResponse::class, MyRegisterResponse::cl
 
 ### Security notes
 
-- **Passwords are hashed** (bcrypt via `Password::defaults()`), never stored or logged in plaintext; `confirmed` is enforced server-side, and the length is bounded (`max:255`) so an unauthenticated caller can't force unbounded verifier work.
+- **Passwords are hashed**, never stored or logged in plaintext. The default create hashes with `Hash::make` — your app's configured driver (bcrypt unless you changed it); a `registerUsing()` hook must hash itself. `Password::defaults()` is only the *strength* policy, not the hashing. `confirmed` is enforced server-side, and the length is bounded (`max:255`) so an unauthenticated caller can't force unbounded verifier work.
 - **Enumeration**: a registration form inherently reveals whether an identifier is taken (the `unique` rule → `422`). lukk adds no faster oracle — same status, same shape for taken vs. new beyond that rule.
 
 > [!WARNING]
@@ -151,27 +152,42 @@ $this->app->bind(\Lukk\Contracts\RegisterResponse::class, MyRegisterResponse::cl
 The client exposes a `register()` that mints a session, parallel to `login()` — same transport (BFF or direct), same outcomes (token pair, 2FA challenge, or verify-first), so your sign-up form is as simple as your login form.
 
 ```ts
+import type { LukkError } from 'lukk-core'
+
 const { register } = useLukkAuth()
+const errors = ref<Record<string, string[]>>({})
 
 async function submit() {
-  const result = await register({
-    name: name.value,
-    email: email.value,
-    password: password.value,
-    password_confirmation: passwordConfirmation.value,
-  })
+  errors.value = {}
+  try {
+    const result = await register({
+      name: name.value,
+      email: email.value,
+      password: password.value,
+      password_confirmation: passwordConfirmation.value,
+    })
 
-  if (result?.two_factor) {
-    // new user is 2FA-enrolled — send them to your challenge screen (same as login)
-  }
-  else {
+    if ('registered' in result) {
+      // No session: verify first, or sign in separately.
+      return navigateTo(result.requires_verification ? '/verify-email' : '/login')
+    }
+    if ('two_factor' in result) {
+      // The new user is 2FA-enrolled — `pendingTwoFactor` is set; show your challenge screen (same as login).
+      return navigateTo('/two-factor')
+    }
     await navigateTo('/dashboard') // signed in
+  }
+  catch (e) {
+    // 422: Laravel's bag, keyed by field (`email` for a taken address, `password` for a rule failure).
+    errors.value = (e as LukkError).errors ?? {}
   }
 }
 ```
 
-Because a successful register returns the same token pair as login, the session is established for you — no separate login call. When `block_unverified_login` is on, `register()` resolves without a session and the client surfaces the `requires_verification` signal so you can route to a "check your inbox" page; pair it with [`useLukkEmailVerification`](/email-verification) to resend the link.
+`register()` resolves to a `RegisterResult | BffSignInResult`: in BFF mode a session comes back as the proxy's `{ ok: true, expires_in }` rather than a token pair, so narrow with `in` (as above) rather than reading `access_token`. `lukk-core` also exports `isRegistrationPending()` and `isTwoFactorChallenge()` for code that holds a plain `RegisterResult` (a `lukk-core` client of your own).
 
-For a form bound to Laravel's validation errors (per-field messages on the `422`), use the [lukk-js form helper](/use-lukk-form).
+Because a successful register returns the same token pair as login, the session is established for you — no separate login call. When no session is issued (`registration.login` off, or `block_unverified_login` on), `register()` resolves to `{ registered: true, requires_verification }` and loads no user; route on `requires_verification` to a "check your inbox" page or to your login page, and pair it with [`useLukkEmailVerification`](/email-verification) to resend the link.
+
+[`useLukkForm`](/use-lukk-form) can't post here: it resolves URLs against your **app's** API base, not lukk's auth base, so `form.post('/register')` would reach your own route. Bind the `LukkError.errors` bag that `register()` rejects with, as above.
 
 Next: **[The User](/user)**

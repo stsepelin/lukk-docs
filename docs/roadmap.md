@@ -1,6 +1,6 @@
 # Roadmap
 
-Where **lukk** (the Laravel package) and **lukk-js** (the TypeScript/Nuxt client) are headed, and what's already shipped. Nothing here is a commitment or a dated milestone — priorities move with real demand, and everything ships **opt-in and backward-compatible**. Detail for what's built lives in the [CHANGELOG](https://github.com/stsepelin/lukk/blob/main/CHANGELOG.md).
+Where **lukk** (the Laravel package) and **lukk-js** (the TypeScript/Nuxt client) are headed, and what's already shipped. Nothing here is a commitment or a dated milestone — priorities move with real demand. New features ship **opt-in** where they can; breaking changes are called out in the CHANGELOG and the upgrade guide ([Upgrading](/upgrading)). Detail for what's built lives in the [CHANGELOG](https://github.com/stsepelin/lukk/blob/main/CHANGELOG.md).
 
 ## lukk (Laravel package)
 
@@ -24,7 +24,7 @@ Grouped by theme; likely order: impersonation → personal access tokens.
 - **[Multiple guards](/multiple-guards)** — per-guard cryptographic token identity, guard-scoped refresh/revocation/throttling, per-guard routes (path or subdomain), boot-time isolation guardrails.
 - **[Registration](/registration)** — `POST /auth/register` mirroring login, fully customizable, with an auto-login toggle.
 - **Configurable login identifier** — `lukk.username` (default `email`); login by any unique column.
-- **[Account lockout](/account-lockout)** *(opt-in)* — a persistent cap on **consecutive** failed attempts (NIST SP 800-63B §5.2.2), covering password login, the two-factor challenge and step-up confirmation; `423`, an operator release command, and lock/release events. Off by default: a hard lockout is a denial-of-service primitive.
+- **[Account lockout](/account-lockout)** *(opt-in)* — a persistent cap on **consecutive** failed attempts (NIST SP 800-63B-4 §3.2.2), covering password login, the two-factor challenge and step-up confirmation; `423`, an operator release command, and lock/release events. Off by default: a hard lockout is a denial-of-service primitive.
 - **Throttle identity** — every limit keys on `Lukk::rateLimitKey()`, with IPv6 collapsed to a configurable prefix (default `/64`) and `Lukk::rateLimitKeyUsing()` to replace the identity wholesale.
 - **[Change password](/change-password)** — an authenticated `POST /auth/password` that re-verifies the current password, revokes every other session, and fires `PasswordChanged`.
 - **[Two-factor (TOTP)](/two-factor-authentication)** — enrol, confirm, challenge at login, single-use recovery codes (+ remaining count), disable.
@@ -45,7 +45,7 @@ Grouped by theme; likely order: impersonation → personal access tokens.
 
 ### Shipped
 
-- **`lukk-core`** — a framework-agnostic auth client (`createLukkClient` hooks seam), WebAuthn helpers, and the full contract types (zero runtime deps).
+- **`lukk-core`** — a framework-agnostic auth client (`createLukkClient` hooks seam) on the platform `fetch`, WebAuthn helpers, and the full contract types (zero runtime deps).
 - **`lukk-nuxt`** — a Nuxt 3/4 module with **BFF** (sealed-cookie proxy) and **direct** transport modes behind one composable API.
 - **Composables** — `useLukkAuth` (login + 2FA challenge + register + logout + sessions + restore + user), `useLukkTwoFactor`, `useLukkConfirmation`, `useLukkPasskeys`, `useLukkEmailVerification`, `useLukkPasswordReset`, `useLukkChangePassword`, `useLukkAccount` (export + erasure), `useLukkAbilities`, `useLukkFetch` (an auth-aware `$fetch`), and `useLukkForm` (Inertia-`useForm`-parity with nested errors + `rememberKey`).
 - **Route middleware** — `lukk-auth`, `lukk-guest`, `lukk-verified`, `lukk-confirmed`.

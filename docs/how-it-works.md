@@ -24,7 +24,7 @@ Either way your component code is identical — the client exposes one `useLukkA
 
 ## 2. Attaching the access token
 
-On every subsequent request the client attaches the access token as `Authorization: Bearer <jwt>`. In `direct` mode the client reads it from memory; in `bff` mode the proxy injects it server-side so the browser never handles it. The [`useLukkFetch`](/use-lukk-fetch) composable does this for your own app API too, correctly in the browser, during SSR, and in server routes.
+On every subsequent request the client attaches the access token as `Authorization: Bearer <jwt>`. In `direct` mode the client reads it from memory; in `bff` mode the proxy injects it server-side so the browser never handles it. The [`useLukkFetch`](/use-lukk-fetch) composable does this for your own app API too, in the browser and during SSR; a Nitro server route reads the session with `getLukkAccessToken(event)` instead.
 
 ## 3. Verifying a request
 
@@ -40,7 +40,7 @@ If it all passes, `$request->user()` is populated and the request proceeds — n
 
 Access tokens are deliberately short-lived, so a `401` is a routine event, not an error. When lukk rejects a request (expired token, or a revoked one), the client catches the `401` and — instead of bubbling it up to your UI — kicks off a refresh.
 
-Concurrent 401s are common (SSR fires a burst of requests, or a user has ten tabs). The client collapses them into a **single in-flight refresh** (`singleFlight`): a page that fires ten requests at once triggers one refresh, not ten. In `bff` mode the proxy single-flights its server-side refresh per session for the same reason.
+Concurrent 401s are common (SSR fires a burst of requests, or a user has ten tabs). The client collapses them into a **single in-flight refresh** (`singleFlight`): a page that fires ten requests at once triggers one refresh, not ten. In `bff` mode the proxy single-flights its server-side refresh per session for the same reason, and journals each rotation so a request still carrying the old cookie is handed the newest pair rather than replaying a consumed token (see [Transport Modes](/transport-modes#a-slow-rotation)).
 
 ## 5. Refreshing and rotating
 
@@ -48,7 +48,7 @@ The client sends the refresh token to `/auth/refresh`. lukk, inside a transactio
 
 ## 6. Reuse detection
 
-Rotation is what makes theft detectable. Because a refresh token is consumed on use, presenting an **already-consumed** token after a short [grace window](/tokens-and-rotation#the-grace-window) is the signature of a stolen token being replayed. lukk responds by revoking the **entire family** — every live access and refresh token for that session — and denylisting it by `fid`, so every access token dies within one 15-minute TTL. It also dispatches a [`RefreshTokenReused`](/events) event so you can alert on it.
+Rotation is what makes theft detectable. Because a refresh token is consumed on use, presenting an **already-consumed** token after a short [grace window](/tokens-and-rotation#the-grace-window) is the signature of a stolen token being replayed. lukk responds by revoking the **entire family** — every live access and refresh token for that session — and denylisting it by `fid`, so every access token for it is refused from its next request on — the denylist is checked on each one. It also dispatches a [`RefreshTokenReused`](/events) event so you can alert on it.
 
 The grace window is the counterweight: legitimate concurrent refreshes (multiple tabs, SSR + hydration) present the same token nearly simultaneously and must **not** be mistaken for theft, so within the window the straggler is served a fresh token under the same family instead of triggering a revoke. This is why the client single-flights and why lukk keeps `grace_seconds > 0`.
 

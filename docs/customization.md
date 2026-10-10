@@ -17,7 +17,29 @@ public function boot(): void
 }
 ```
 
-`Lukk::actingAs()` (for authenticating a user in your own tests) and `Lukk::disableScheduling()` (to take over the `lukk:prune` cadence — see [Deployment](/deployment)) live on the same hub.
+The full set of hooks:
+
+| Hook | What it replaces | See |
+|---|---|---|
+| `authenticateUsing(Closure)` | The credential check at login | [below](#custom-login-logic) |
+| `tokenClaimsUsing(Closure)` | Adds custom claims to every access token | [below](#custom-token-claims) |
+| `abilitiesUsing(Closure)` | The derived ability grant, per mint | [Abilities](/abilities#setup) |
+| `rateLimitKeyUsing(Closure)` | The identity every throttle buckets on | [below](#lukk-ratelimitkeyusing) |
+| `registerUsing(Closure\|string)` | The user create at `POST /auth/register` | [Registration](/registration#customizing-the-user-s-fields) |
+| `registerValidation(Closure)` | The registration rules | [Registration](/registration#customizing-the-user-s-fields) |
+| `deleteUserUsing(Closure)` | Disposing of the user row at erasure (e.g. anonymize) | [Account deletion](/account-deletion#anonymizing-instead-of-deleting) |
+| `useRefreshTokenModel(string)` | The refresh-token Eloquent model | [below](#swapping-the-refresh-token-model) |
+| `disableScheduling()` | lukk's own `lukk:prune` schedule, so you set the cadence | [Deployment](/deployment) |
+| `actingAs($user, $guard, $abilities)` | Authenticates a user in your own tests | — |
+
+And a few read-only helpers, for code of your own that must agree with lukk:
+
+| Helper | Answers |
+|---|---|
+| `Lukk::rateLimitKey(Request)` | The throttle identity lukk uses for this request (your `rateLimitKeyUsing` result, or the normalized address) — key your own limiters on it. |
+| `Lukk::usesAbilities(?string $guard)` | Whether abilities are in use on that guard: a callback is set **or** `features.abilities` is on. Not the same as "is `abilitiesUsing` set" — a pinned-grant-only install has no callback. |
+| `Lukk::enforcesTwoFactor(?string $guard)` | Whether an enrolled second factor is challenged on that guard — `true` unless `features.two_factor` is explicitly `false`/`0`/`'0'` (unset fails closed). |
+| `Lukk::currentGuard()` / `Lukk::onGuard($name, $callback)` / `Lukk::useGuard($name)` | The lukk guard active for this request; run a callback with another active (restored afterwards); set it outright, as lukk's per-guard route middleware does. See [Multiple guards](/multiple-guards). |
 
 ## Custom login logic
 
@@ -123,7 +145,7 @@ $this->app->bind(LoginResponse::class, MyLoginResponse::class);
 The response contracts are `LoginResponse`, `RefreshResponse`, `LogoutResponse`, `RegisterResponse`, `TwoFactorChallengeResponse` and `EmailVerificationResponse`. A contract exists only where the body is a genuine swap seam — it carries a token pair or a user resource, or it branches on the request (`EmailVerificationResponse` is a `204` for a JSON client and a redirect to `frontend_url` for a browser). Fixed acknowledgements and data reads (`{"status": "password-reset"}`, the passkey list, JWKS, the account export) return JSON directly; there is nothing to swap.
 
 > [!WARNING]
-> **`LogoutResponse` takes `bool $clearRefreshCookie` (lukk 0.7.0), and a rebound implementation must honour it.** It is `false` when `POST /auth/logout` did not accept the refresh cookie from that request — none was presented, or the request had a shape a cross-site form could produce. Sending the clearing `Set-Cookie` anyway re-opens the forced-logout CSRF the check exists to close: a clearing cookie on a `204` is stored even after a fully cross-site top-level navigation, so any page could sign your visitors out.
+> **`LogoutResponse` takes `bool $clearRefreshCookie` (lukk 0.7.0, default `true`), and a rebound implementation must honour it.** It is `false` when `POST /auth/logout` did not accept the refresh cookie from that request — none was presented, or the request had a shape a cross-site form could produce. Sending the clearing `Set-Cookie` anyway re-opens the forced-logout CSRF the check exists to close: a clearing cookie on a `204` is stored even after a fully cross-site top-level navigation, so any page could sign your visitors out.
 >
 > ```php
 > public function __construct(private readonly bool $clearRefreshCookie = true) {}
@@ -151,6 +173,7 @@ The cryptographic and revocation seams are contracts too. Rebind `Contracts\Toke
 | `Denylist` | `CacheDenylist` | Records and checks revoked `jti`/`fid` values. |
 | `LoginResponse` / `RefreshResponse` / `LogoutResponse` | built-in | Shape the HTTP responses. |
 | `RegisterResponse` | built-in | Shapes the [registration](/registration) response (token pair, challenge, or `201`). |
+| `Http\Requests\RegisterRequest` | built-in | The registration rules. Bind a subclass overriding `rules()` (an alternative to `registerValidation()`); lukk's string/NUL/72-byte password checks still run after it. |
 | `TwoFactorChallengeResponse` | built-in | Shapes the 2FA login challenge. |
 | `EmailVerificationResponse` | built-in | Answers a verified link: `204` for JSON, a redirect to `frontend_url` for a browser. |
 | `LockoutRepository` | `DatabaseLockoutRepository` | Stores the [account-lockout](/account-lockout) counters; also `forget()` for erasure and `summariesForSubjects()` for the export — called on whatever is bound, so answer `0` / `[]` for nothing stored. |
@@ -194,8 +217,6 @@ The single exception is `PasskeyRepository::existsByCredentialId()`, which must 
 Bind a replacement with `bind`, not `singleton` — the active guard is per-request, and a memoized instance carries the previous request's guard into the next one.
 :::
 
-That's the whole customization surface. For the design rationale behind these seams, see [Architecture](/architecture); for the events lukk fires at the security-relevant moments, see [Events](/events). Questions or contributions are welcome on the [lukk](https://github.com/stsepelin/lukk) and [lukk-js](https://github.com/stsepelin/lukk-js) repositories.
-
 ## `Lukk::rateLimitKeyUsing()`
 
 Replace the identity every lukk throttle buckets on. The default is the caller's address, with IPv6 masked to [`rate_limits.ipv6_prefix`](/configuration#rate-limits); override it when the source address isn't the right bucket — a shared API gateway, a tenant, a CDN's own visitor token.
@@ -208,3 +229,5 @@ Lukk::rateLimitKeyUsing(fn (Request $request) => 'tenant-'.$request->user()?->te
 ```
 
 The callback runs on every throttled request, so keep it cheap. The value must be **unforgeable** — it also buckets the login limiter, so a spoofable header would let an attacker mint a fresh bucket per request — and it is used verbatim as part of a cache key, so namespace anything untrusted. An empty return falls back to the address. Under a long-running worker (Octane) the closure outlives the request that registered it: derive everything from the `$request` argument, never capture it.
+
+That's the whole customization surface. For the design rationale behind these seams, see [Architecture](/architecture); for the events lukk fires at the security-relevant moments, see [Events](/events). Questions or contributions are welcome on the [lukk](https://github.com/stsepelin/lukk) and [lukk-js](https://github.com/stsepelin/lukk-js) repositories.

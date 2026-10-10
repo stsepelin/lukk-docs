@@ -20,7 +20,20 @@ After publishing the config with `php artisan vendor:publish --tag=lukk-config`,
 
 #### Asymmetric keys (RS256 / ES256)
 
-Used only when `algorithm` is asymmetric. Generate a keypair with `php artisan lukk:keygen` (add `--algorithm=ES256` for EC, `--kid=` to name the key). It **writes nothing**: it prints the private and public PEMs and the `.env` lines to set (`LUKK_ALGORITHM`, `LUKK_ACTIVE_KID`, `LUKK_PRIVATE_KEY`, `LUKK_PUBLIC_KEY`), and you store the keys yourself. Those feed the `keys` block (`active` kid, `private`, `passphrase`, `public` kid→key map). Under an asymmetric algorithm, `GET {path}/jwks` publishes the public keys as a JWK Set (RFC 7517). See [Deployment → Asymmetric keys](/deployment) for the full block, key-rotation procedure, and the JWKS endpoint.
+Used only when `algorithm` is asymmetric. Generate a keypair with `php artisan lukk:keygen` (add `--algorithm=ES256` for EC, `--kid=` to name the key). It **writes nothing**: it prints the private and public PEMs and the `.env` lines to set (`LUKK_ALGORITHM`, `LUKK_ACTIVE_KID`, `LUKK_PRIVATE_KEY`, `LUKK_PUBLIC_KEY`), and you store the keys yourself. Those feed the `keys` block:
+
+```php
+'keys' => [
+    'active' => env('LUKK_ACTIVE_KID', 'default'),   // the kid stamped on every token this app signs
+    'private' => env('LUKK_PRIVATE_KEY'),            // signing key (issuer only)
+    'passphrase' => env('LUKK_KEY_PASSPHRASE'),      // for an encrypted private key
+    'public' => array_filter([                       // kid => verification key
+        env('LUKK_ACTIVE_KID', 'default') => env('LUKK_PUBLIC_KEY'),
+    ]),
+],
+```
+
+Each key may be an inline PEM or a path to one (`@/run/secrets/lukk.pem`, or a bare path), so it can live in a secrets-mounted file rather than the environment. Under an asymmetric algorithm, `GET {path}/jwks` publishes the public keys as a JWK Set (RFC 7517). See [Deployment → Asymmetric keys](/deployment) for the full block, key-rotation procedure, and the JWKS endpoint.
 
 ### Issuer & audience
 
@@ -31,7 +44,7 @@ LUKK_AUDIENCE=https://api.example.com
 
 The `iss` and `aud` claims stamped into every token and validated on every request. Set both to your API's URL.
 
-`LUKK_AUDIENCE` is **comma-separated**. To mint tokens for **several services**, list them all — `LUKK_AUDIENCE=https://api.example.com,https://billing.example.com`. The token then lists both, and each service accepts it when its own audience is in the list. A single audience is stamped as a plain string. See [Deployment](/deployment).
+`LUKK_AUDIENCE` is **comma-separated**. To mint tokens for **several services**, list them all — `LUKK_AUDIENCE=https://api.example.com,https://billing.example.com`. The token then lists both, and each service accepts it when its own audience is in the list. A single audience is stamped as a plain string. See [Deployment](/deployment). Only the top-level `LUKK_AUDIENCE` is split on commas: an extra guard's `audience` in [`lukk.guards`](/multiple-guards) is taken as written, so list several there as a PHP array.
 
 ### Token lifetimes
 
@@ -43,7 +56,7 @@ The `iss` and `aud` claims stamped into every token and validated on every reque
 | Key | Default | Description |
 |---|---|---|
 | `access_ttl` | `900` (15 min) | Access-token lifetime, in seconds. Keep it short — revocation latency is bounded by this value. |
-| `refresh_ttl` | `2592000` (30 days) | The **absolute** session lifetime, in seconds. It is set at login and inherited by every rotation — it does **not** slide, so a session ends `refresh_ttl` after login regardless of activity, and the user must log in again. |
+| `refresh_ttl` | `2592000` (30 days) | The **absolute** session lifetime, in seconds. It is set at login and inherited by every rotation — it does **not** slide, so a session ends `refresh_ttl` after login regardless of activity, and the user must log in again. In cookie mode the refresh cookie's `Max-Age` follows it: from lukk 0.7.0 each rotation sets it to what is left of the session, not a fresh `refresh_ttl`. |
 
 ### Refresh behavior
 
@@ -83,22 +96,30 @@ The configurable throttles live here, each shaped as `{ max_attempts, decay_seco
     'refresh' => ['max_attempts' => 30, 'decay_seconds' => 60],
     'passkeys' => ['max_attempts' => 30, 'decay_seconds' => 60],
     'confirm' => ['max_attempts' => 5, 'decay_seconds' => 60],
+    'email_verification' => ['max_attempts' => 6, 'decay_seconds' => 60],
+    'password_reset' => ['max_attempts' => 6, 'decay_seconds' => 60],
+    'registration' => ['max_attempts' => 10, 'decay_seconds' => 60],
 ],
 ```
+
+Each value has an env var: `LUKK_LOGIN_MAX_ATTEMPTS` / `LUKK_LOGIN_DECAY` / `LUKK_LOGIN_IP_MAX_ATTEMPTS` / `LUKK_LOGIN_ACCOUNT_MAX_ATTEMPTS`, and `LUKK_{2FA,REFRESH,PASSKEY,CONFIRM,VERIFY,RESET,REGISTER}_MAX_ATTEMPTS` / `…_DECAY` for the others, in that order.
 
 | Limit | Default | Keyed on | Notes |
 |---|---|---|---|
 | `login` | 5 / 60s (+ `ip_max_attempts` 30, `account_max_attempts` 20) | folded identifier + IP | Failures-only: only failed attempts count, a success clears the per-address counter, and tripping it returns a `429` validation error. **`ip_max_attempts`** (env `LUKK_LOGIN_IP_MAX_ATTEMPTS`) is a separate coarse per-IP cap on *all* login attempts, bounding password-spraying across many emails. **`account_max_attempts`** (env `LUKK_LOGIN_ACCOUNT_MAX_ATTEMPTS`) is an IP-**independent** cap keyed on the identifier alone, so a botnet can't take `max_attempts` guesses *per source IP* against one account. Both buckets key on the case- and script-folded identifier **only** — never on the resolved account — so `429` and its `Retry-After` answer the same whether or not an account exists. From lukk 0.7.0 a success clears only the per-address bucket; the IP-independent one decays, so a look-alike address (another case, a Cyrillic а) that is a *different* account cannot sign in to reset this one's count. |
 | `two_factor` | 5 / 60s | account (`sub`) | Throttles challenge-code guesses for a single account. Also guards the endpoint per IP. |
 | `refresh` | 30 / 60s | IP | Per-IP guard on `POST /auth/refresh`. |
-| `passkeys` | 30 / 60s | IP | Per-IP guard on the passkey login + assertion-options endpoints. |
-| `confirm` | 5 / 60s | account **and** IP | Guards [step-up confirmation](/confirmation) (`confirm-password`, `confirm-passkey`). Password confirmation re-checks the same secret as login, so the per-user bucket is the load-bearing one — a stolen token is one identity behind any number of addresses. |
+| `passkeys` | 30 / 60s | IP | Per-IP guard on `passkeys/login-options`, `passkeys/login` and the step-up's `confirm-passkey/options`. |
+| `confirm` | 5 / 60s | account **and** IP | Guards [step-up confirmation](/confirmation) (`confirm-password`, `confirm-passkey`), [change password](/change-password) (`POST /auth/password`) and the [account export](/account-deletion) (`GET /auth/account/export`). Each re-checks the same secret as login, or hands out what a stolen token wants, so the per-user bucket is the load-bearing one — a stolen token is one identity behind any number of addresses. |
+| `email_verification` | 6 / 60s | IP (+ user on the resend) | The resend (`email/verification-notification`) and the signed verify link. The authenticated resend also gets a per-user bucket. |
+| `password_reset` | 6 / 60s | IP | `forgot-password` and `reset-password`. |
+| `registration` | 10 / 60s | IP | `register`. Deliberately no per-identity bucket: that would let anyone stop a chosen address from registering. |
 
 `login.*` and `two_factor.*` are read **per guard** from lukk 0.7.0, like `features.lockout` and the `lockout` block — an extra guard that tightened them in its [`lukk.guards`](/multiple-guards) block silently got the global values before. And a key missing from a degraded config (a `config:cache` taken before the key existed is never backfilled) falls back to the value `config/lukk.php` ships, never to a looser generic default: up to 0.6 a missing `confirm`, `email_verification` or `password_reset` limit fell back to 30 per minute, six times the shipped value.
 
-These bound a **rate**, not a run: the window keeps resetting, so `account_max_attempts` at 20/60s permits ~1,200 failures an hour indefinitely. The separate, opt-in [account lockout](/account-lockout) is what caps *consecutive* failures (NIST SP 800-63B §5.2.2).
+These bound a **rate**, not a run: the window keeps resetting, so `account_max_attempts` at 20/60s permits ~1,200 failures an hour indefinitely. The separate, opt-in [account lockout](/account-lockout) is what caps *consecutive* failures (NIST SP 800-63B-4 §3.2.2).
 
-Each maps to a named limiter (`lukk-refresh`, `lukk-passkeys`, `lukk-2fa`) you can also override with your own `RateLimiter::for()`. Tune any of them with the matching env vars — `LUKK_REFRESH_MAX_ATTEMPTS`, `LUKK_2FA_DECAY`, and so on.
+Each maps to a named limiter you can also override with your own `RateLimiter::for()`: `lukk-login` (the per-IP route cap, `ip_max_attempts`), `lukk-refresh`, `lukk-2fa`, `lukk-passkeys`, `lukk-confirm`, `lukk-email-verification`, `lukk-password-reset`, `lukk-register` and `lukk-claim`. An [extra guard](/multiple-guards) gets its own `lukk-{guard}-login`, `-refresh`, `-2fa`, `-confirm` and `-claim`, read from its own block. The per-identifier login buckets and the two-factor per-account count run inside the action and have no limiter name. All of them count in Laravel's rate-limiter store (`cache.limiter`, else your default cache), not in [`denylist_store`](#denylist).
 
 #### Throttles without a key of their own
 
@@ -107,7 +128,7 @@ Two buckets read `rate_limits.refresh` rather than owning a key, because each is
 - **The logout refresh-token lookup** (lukk 0.7.0), keyed per guard and per caller. `POST /auth/logout` has no route throttle; what is metered is the lookup of a presented refresh token, and only when it comes up empty or names an already-revoked family. A logout that ends a live session costs nothing, and one carrying a valid access token skips the bucket entirely. Exhausted, it answers `429` with `Retry-After` before looking anything up — see [Authentication → Logging out](/authentication#logging-out).
 - **The claim route** (`lukk-claim`, and `lukk-{guard}-claim` on an extra guard), which gates `POST /auth/session/claim`. Keyed per **user**, not per address: every call is already authenticated, and an address-keyed bucket is the one a NAT or a BFF shares. It falls back to the caller's address only when no user resolves.
 
-**What "keyed on IP" actually means.** Every throttle buckets on `Lukk::rateLimitKey()`, which is the caller's address with IPv6 collapsed to **`ipv6_prefix`** (default `/64`, env `LUKK_RATE_LIMIT_IPV6_PREFIX`). A subscriber is typically handed a whole `/64`, so keying on the full address would let one visitor mint effectively unlimited buckets and walk through every per-IP limit. IPv4 is used as-is, and addresses that embed IPv4 (IPv4-mapped, NAT64's `64:ff9b::/96`) are unwrapped rather than masked — otherwise a whole translated client population would share one counter. Raise it toward `128` if your users share a `/64` (an office or campus LAN does); lower it if your attackers hold larger delegations.
+**What "keyed on IP" actually means.** Every throttle buckets on `Lukk::rateLimitKey()`, which is the caller's address with IPv6 collapsed to **`ipv6_prefix`** (default `/64`, env `LUKK_RATE_LIMIT_IPV6_PREFIX`). It is clamped to `32`–`128`, a non-numeric value means `64`, and it is read from the global block only — one mask for every guard. A subscriber is typically handed a whole `/64`, so keying on the full address would let one visitor mint effectively unlimited buckets and walk through every per-IP limit. IPv4 is used as-is, and addresses that embed IPv4 (IPv4-mapped, NAT64's `64:ff9b::/96`) are unwrapped rather than masked — otherwise a whole translated client population would share one counter. Raise it toward `128` if your users share a `/64` (an office or campus LAN does); lower it if your attackers hold larger delegations.
 
 Behind a BFF or reverse proxy that address is the **proxy** until the deployment forwards the real client — see [`clientIpHeader`](#clientipheader). Replace the identity entirely when the source address isn't the right bucket for you (a shared API gateway, a tenant, a CDN's own visitor token):
 
@@ -137,7 +158,7 @@ The [grace window](/tokens-and-rotation#the-grace-window) mints a sibling for a 
 The cache store backing the revocation denylist. `null` uses your application's default cache store. The denylist is self-evicting (entries expire with the tokens they revoke), so any cache driver works — Redis is recommended in production. Use a store that **throws** when unreachable (Redis, database): a denylist read error then propagates and access-token verification **fails closed** (rejects), rather than silently treating a revoked token as valid. Avoid a store that swallows connection errors into a `null`/miss.
 
 > [!IMPORTANT]
-> Across **multiple nodes** this must be a **shared, persistent** store (e.g. Redis) — not the `array` driver and not a per-node cache. The same store also backs the TOTP replay cache and the passkey/2FA throttles; if it isn't shared, a revoked token can still be honored on another node and replay protection isn't authoritative.
+> Across **multiple nodes** this must be a **shared, persistent** store (e.g. Redis) — not the `array` driver and not a per-node cache. The same store also holds the TOTP replay markers, passkey challenges, spent two-factor challenge markers, the [`claim_seconds`](#refresh-behavior) markers and the record of the longest access-token lifetime issued; if it isn't shared, a revoked token can still be honored on another node and replay protection isn't authoritative. (The [rate limits](#rate-limits) are not here: they count in Laravel's rate-limiter store, which must be shared across nodes too.)
 
 > [!WARNING]
 > lukk **refuses an `array` or `null` cache store in production.** The check runs when the denylist store is first resolved — on the first request that verifies a token or touches revocation, a TOTP replay marker or a passkey challenge — not at boot, so a misconfigured deploy boots and then throws a `RuntimeException` there. Token revocation, TOTP replay protection and passkey challenges all live here; an array store is per-process, so a revoked token stays valid on every other worker and the single-use guarantees stop being guarantees — silently. Outside production nothing changes, and the array driver stays the right default for a test suite.
@@ -156,7 +177,7 @@ The cache store backing the revocation denylist. `null` uses your application's 
 | Mode | Behavior |
 |---|---|
 | `false` (default) | **BFF mode.** Both tokens are returned in the JSON body, for a server-side client (such as a Nuxt BFF) that seals them itself. |
-| `true` | **Direct browser mode.** The refresh token is set in a `__Host-refresh` cookie (HttpOnly, Secure, `SameSite=Strict`, `Path=/`, no `Domain`); only the access token and its expiry are in the body. The routes that set it — login, register, refresh, two-factor-challenge, passkeys/login — answer `415` unless the request is JSON or `Sec-Fetch-Site: same-origin`/`none` ([why](/authentication#output-modes)). |
+| `true` | **Direct browser mode.** The refresh token is set in a `__Host-refresh` cookie (HttpOnly, Secure, `SameSite=Strict`, `Path=/`, no `Domain`, `Max-Age` what is left of the session); only the access token and its expiry are in the body. The routes that set it — login, register, refresh, two-factor-challenge, passkeys/login — answer `415` unless the request is JSON or `Sec-Fetch-Site: same-origin`/`none` ([why](/authentication#output-modes)). |
 
 `cookie.secure` (env `LUKK_COOKIE_SECURE`, default `true`) controls the refresh cookie's `Secure` attribute. **Keep it `true` in production** — the refresh token must never travel over plain http. Set it to `false` **only for local development over http**; lukk then also strips the `__Host-` prefix, which requires `Secure`. Never ship `secure=false` — see [Local Development](/local-development).
 
@@ -175,20 +196,22 @@ See [Authentication → Output modes](/authentication#output-modes) for the full
 |---|---|---|
 | `guard` | `api` | The auth guard your app maps to the `lukk-jwt` driver. Used by the package's route middleware. An unset, null or empty value means `api` everywhere lukk reads it (lukk 0.7.0 — before, some readers took `''` as the guard name). A numeric name is refused at boot. |
 | `user_provider` | `users` | The `config/auth.php` user provider used to resolve and validate credentials during login. |
-| `username` | `email` | The identifier column for login and registration. Must be a plain column name not containing `password`; unset, null or empty falls back to `email`. See [Registration → Username instead of email](/registration#username-instead-of-email). |
-| `guards` | `[]` | Extra guards, each a `name => [overrides]` block — see [Multiple Guards](/multiple-guards). `false` or `''` mean none. A list of names, a numeric name or a truthy scalar is refused at boot with a message naming the problem (lukk 0.7.0). |
+| `username` | `email` | The identifier column for login and registration (env `LUKK_USERNAME`). Must be a plain column name not containing `password`; unset, null or empty falls back to `email`. With `app.debug` on and the stock Eloquent provider, sign-in checks the column exists and throws naming the setting if it doesn't (lukk 0.7.0) — on SQLite a typo used to read as a string literal that matched every row. Production skips the check. See [Registration → Username instead of email](/registration#username-instead-of-email). |
+| `guards` | `[]` | Extra guards, each a `name => [overrides]` block — see [Multiple Guards](/multiple-guards). `false` or `''` mean none. A list of names, a numeric name or a truthy scalar is refused at boot with a message naming the problem (lukk 0.7.0), and so are an entry named after the default guard and a `lukk-jwt` guard in `config/auth.php` with no block here. |
 
 ### Routes
 
 ```php
 'routes' => true,
 'path' => 'auth',
+'domain' => env('LUKK_DOMAIN'),
 ```
 
 | Key | Default | Description |
 |---|---|---|
 | `routes` | `true` | Whether to register the package's built-in routes. Set to `false` to define your own. |
 | `path` | `auth` | The URI prefix the routes are mounted under (e.g. `/auth/login`). A null value mounts at `auth`, not at the root (lukk 0.7.0). |
+| `domain` | `null` | Bind the routes to one host (e.g. `api.example.com`). Null serves them on any host. Each [extra guard](/multiple-guards#path-vs-subdomain) can set its own. |
 
 ### Feature toggles
 
@@ -222,8 +245,11 @@ Rotation, reuse detection and the denylist are not switches: they are the securi
 |---|---|---|
 | `logout_all` | `true` | Mount `DELETE /auth/sessions` ("log out everywhere"). Honoured from lukk 0.7.0, per guard; earlier releases ignored it. `false` makes the route a `404`. |
 | `two_factor` | `false` | Enable [two-factor authentication](/two-factor-authentication). Requires `pragmarx/google2fa`. Honoured per guard. Only `false`, `0` or `'0'` stops enrolled accounts from being challenged; an unset or blank value fails closed. |
-| `lockout` | `false` | Enable the [account lockout](/account-lockout) — the NIST SP 800-63B §5.2.2 consecutive-failure cap. Requires the `lukk-lockout-migrations` migration. Honoured per guard from lukk 0.7.0. |
+| `lockout` | `false` | Enable the [account lockout](/account-lockout) — the NIST SP 800-63B-4 §3.2.2 consecutive-failure cap. Requires the `lukk-lockout-migrations` migration. Honoured per guard from lukk 0.7.0. |
 | `change_password` | **`true`** | Enable [change password](/change-password) (`POST /auth/password`). On by default — it needs no configuration. |
+| `account_deletion` | **`true`** | Mount [account erasure and export](/account-deletion) (`DELETE /auth/account`, `GET /auth/account/export`), both behind step-up. On by default: erasure is a legal right (GDPR Art. 17). Turn it off where deletion is handled elsewhere. |
+| `abilities` | `false` | Mark the [abilities](/abilities) feature as in use when grants come only from pinned sessions. Configuring `Lukk::abilitiesUsing()` turns it on by itself. |
+| `gate_auth_routes` | **`true`** | Refuse a [pinned token](/abilities#lukk-s-own-routes) lukk's own session-management and account-security routes unless its grant names them. Derived grants are never gated. |
 | `passkeys` | `false` | Enable [passkeys](/passkeys). Requires a WebAuthn library. |
 | `email_verification` | `false` | Enable [email verification](/email-verification). |
 | `password_reset` | `false` | Enable [password reset](/password-reset). |
@@ -248,9 +274,9 @@ Used only when `features.two_factor` is enabled. See [Two-Factor Authentication]
 | Key | Default | Description |
 |---|---|---|
 | `issuer` | `config('app.name')` | The label shown in the authenticator app. |
-| `window` | `1` | Accepted clock drift, in 30-second steps (±1). Do not widen this — it multiplies brute-force odds. |
-| `recovery_codes` | `8` | How many recovery codes are generated. |
-| `challenge_ttl` | `300` (5 min) | How long a login challenge token is valid. |
+| `window` | `1` | Accepted clock drift, in 30-second steps (±1). Clamped to `0`–`10`. Do not widen this — it multiplies brute-force odds. |
+| `recovery_codes` | `8` | How many recovery codes are generated. Clamped to `1`–`100`. |
+| `challenge_ttl` | `300` (5 min) | How long a login challenge token is valid. Read per guard from lukk 0.7.0. |
 
 ### Confirmation
 
@@ -266,9 +292,9 @@ Settings for [step-up confirmation](/confirmation).
 
 | Key | Default | Description |
 |---|---|---|
-| `ttl` | `300` (5 min) | How long a confirmation ("sudo") proof remains valid. |
+| `ttl` | `300` (5 min) | How long a confirmation ("sudo") proof remains valid. Read per guard from lukk 0.7.0. |
 | `mfa_max_age` | `86400` (1 day) | **lukk 0.7.0.** How long after a multi-factor sign-in (the token's [`auth_time`](/tokens-and-rotation#the-auth-time-claim)) a password step-up is still accepted on an account with a second factor. NIST SP 800-63B-4 §2.2.3 allows one-factor reauthentication within an AAL2 session, whose overall limit SHOULD be about a day; `mfa` alone would vouch for the whole `refresh_ttl`. An `auth_time` more than `leeway` in the future is refused too, so after **lowering `refresh_ttl`** — which moves every older session's derived `auth_time` forward — those sessions need a fresh multi-factor sign-in to step up with a password. See [Confirmation → With a password](/confirmation#with-a-password). For "never", set a value as large as you like in the published config (`PHP_INT_MAX`, or a float past the integer range — compared as a float, so it can't overflow); then only the epoch bounds the allowance. Read per guard. |
-| `header` | `X-Lukk-Confirmation` | The request header that carries the confirmation token. Must match the client's [`confirmationHeader`](#confirmationheader). |
+| `header` | `X-Lukk-Confirmation` | The request header that carries the confirmation token. Must match the client's [`confirmationHeader`](#confirmationheader). Read per guard from lukk 0.7.0 — the header of the guard that authenticated the request — so a guard with its own `confirm.header` needs its clients to send it there. |
 
 ### Passkeys
 
@@ -290,7 +316,48 @@ Used only when `features.passkeys` is enabled. See [Passkeys](/passkeys).
 | `rp_id` | **required** | The registrable domain shared by your front-end and API — e.g. `example.com`, **not** `api.example.com`. Throws if unset when passkeys are enabled. |
 | `origins` | **required** | Allowed browser origins (your front-end), as a comma-separated `LUKK_PASSKEY_ORIGINS` value. An empty list is rejected. |
 | `challenge_ttl` | `300` (5 min) | How long a WebAuthn ceremony may take. Sent to the browser as the options' `timeout` (in milliseconds); the server keeps the challenge 30 seconds longer, so an answer given at the last moment is still accepted in transit. lukk 0.7.0 raised the default from `120` to the WebAuthn L3 §15.1 recommendation for a user-verifying ceremony — [why](/passkeys#logging-in-with-a-passkey). With `user_verification` `discouraged` everywhere, WebAuthn suggests `120`: a tap needs less time. |
-| `user_verification` | `required` | What a passkey **login** asks the authenticator for: verify the user (biometric/PIN), not just their presence. Lower to `preferred` only for authenticators that can't verify the user. One of `required`, `preferred`, `discouraged`. From lukk 0.7.0 it no longer decides whether a login counts as multi-factor — that is read from each assertion ([see why](/passkeys#when-a-passkey-counts-as-multi-factor)) — and a step-up sets its own requirement from the account's level. |
+| `user_verification` | `required` | What a passkey **login** and a passkey **registration** ask the authenticator for: verify the user (biometric/PIN), not just their presence. Lower to `preferred` only for authenticators that can't verify the user. One of `required`, `preferred`, `discouraged`. From lukk 0.7.0 it no longer decides whether a login counts as multi-factor — that is read from each assertion ([see why](/passkeys#when-a-passkey-counts-as-multi-factor)) — and a step-up sets its own requirement from the account's level. |
+
+### Lockout
+
+Used only when `features.lockout` is enabled. See [Account Lockout](/account-lockout).
+
+```php
+'lockout' => [
+    'max_attempts' => (int) env('LUKK_LOCKOUT_MAX_ATTEMPTS', 100),
+    'release_after' => (int) env('LUKK_LOCKOUT_RELEASE_AFTER', 0),
+],
+```
+
+| Key | Default | Description |
+|---|---|---|
+| `max_attempts` | `100` | Consecutive failures before an account locks — a ceiling, not a target. |
+| `release_after` | `0` (never) | Seconds after which a lock lifts itself; `0` holds it until something [releases it](/account-lockout#releasing-a-lock) — a password reset or change, `lukk:release`. [Choose deliberately](/account-lockout#bounding-the-denial). |
+
+### Email verification, password reset, registration
+
+Used only when the matching feature is on; each page has the details.
+
+| Key | Env | Default | Description |
+|---|---|---|---|
+| `email_verification.frontend_url` | `LUKK_VERIFY_URL` | `null` | Where the verify link lands the browser (with `?verified=1`). Empty answers `204` instead of redirecting. See [Email Verification](/email-verification). |
+| `email_verification.expire` | `LUKK_VERIFY_EXPIRE` | `60` | The signed link's lifetime, in minutes. |
+| `email_verification.block_unverified_login` | `LUKK_VERIFY_BLOCK_LOGIN` | `false` | Refuse sign-in to an unverified user with `403`, instead of gating routes with `lukk.verified`. Read per guard. |
+| `password_reset.frontend_url` | `LUKK_RESET_URL` | `null` | Your reset page; the emailed link appends `?token=…&email=…`. Effectively required: empty emails a link with no host. See [Password Reset](/password-reset). |
+| `password_reset.revoke_sessions` | `LUKK_RESET_REVOKE_SESSIONS` | `true` | Revoke every session on a successful reset. |
+| `password_reset.revoke_passkeys` | `LUKK_RESET_REVOKE_PASSKEYS` | `false` | Also remove every passkey (lukk 0.7.0). Only useful with `revoke_sessions` on. |
+| `password_reset.timebox_micros` | `LUKK_RESET_TIMEBOX_MICROS` | `1000000` | Wall-clock budget for every forgot-password request and every failed reset. |
+| `password_reset.broker` | `LUKK_RESET_BROKER` | `null` | The `auth.passwords` broker; null uses your default. |
+| `registration.login` | `LUKK_REGISTER_LOGIN` | `true` | Start a session on registration, or answer `201` and let the user sign in separately. See [Registration](/registration). |
+
+### Console commands
+
+| Command | Does |
+|---|---|
+| `lukk:secret` | Writes `LUKK_SECRET` to `.env` — see [Installation](/installation#generate-the-signing-secret). `--guard=admin` writes `LUKK_ADMIN_SECRET` for an [extra guard](/multiple-guards). |
+| `lukk:keygen` | Prints an RS256/ES256 keypair and the `.env` lines; writes nothing. |
+| `lukk:prune` | Deletes expired refresh tokens, spent lockout counters and orphaned passkeys; scheduled daily — see [Deployment](/deployment#pruning-expired-tokens). |
+| `lukk:release` | Lifts an [account lockout](/account-lockout#releasing-a-lock) (`--purpose=`, `--guard=`). |
 
 ## Client (Nuxt)
 
@@ -302,6 +369,7 @@ Everything is configured under the `lukk` key in `nuxt.config.ts`:
 | `mode` | `'bff' \| 'direct'` | `'bff'` | Transport mode — see [Transport Modes](/transport-modes). |
 | `ssrHydrate` | `bool` | `true` | BFF-only — hydrate `user`/`loggedIn` during SSR (no flash). |
 | `user.endpoint` | `string` | `''` | Your app's authenticated user route (per-mode). |
+| `user.key` | `string \| false` | `'data'` | The wrapper key to unwrap from the user response — see [The User](/user). |
 | `api.path` / `api.target` / `api.forceJson` / `api.forwardSetCookie` | `string` / `string` / `bool` / `string[]` | `''` / `''` / `true` / `[]` | BFF-only app-API proxy. |
 | `session.password` | `string` | env | BFF sealed-session secret (≥ 32 chars). |
 | `session.cookieSecure` | `bool` | auto | BFF session cookie `Secure`/`__Host-` — see [Local Development](/local-development). |
@@ -311,7 +379,7 @@ Everything is configured under the `lukk` key in `nuxt.config.ts`:
 | `bodyLimit` | `number` (bytes) | `1048576` (1 MiB) | BFF: the largest request body the auth proxy reads. |
 | `confirmationHeader` | `string` | `'X-Lukk-Confirmation'` | Header carrying the step-up token. |
 | `clientIpHeader` | `string` | `''` | BFF-only, opt-in — forward the real visitor IP upstream. |
-| `storage` | `string` | `'cookie'` | BFF token storage backend. |
+| `storage` | `'cookie'` | `'cookie'` | Reserved — any other value fails the build. |
 
 ```ts
 export default defineNuxtConfig({
@@ -321,10 +389,11 @@ export default defineNuxtConfig({
     mode: 'bff',
     user: { endpoint: '/api/me' },
     confirmationHeader: 'X-Lukk-Confirmation',
-    storage: 'cookie',
   },
 })
 ```
+
+The module also **warns** at build — without failing — when only one of `api.path` / `api.target` is set (the app-API proxy is then not registered), when `clientIpHeader` is set in `direct` mode (it has no effect there) or names an append-style header, when `session.name` isn't a slug, when BFF mode has no session password, and when `session.cookieSecure` is `false` in a production build.
 
 ### `baseURL`
 
@@ -336,10 +405,10 @@ baseURL: 'https://api.example.com/auth'
 
 In `bff` mode this is read **only on the server** and is never shipped to the browser. In `direct` mode it is part of the public runtime config, because the browser calls lukk directly — so it must be reachable from the browser and [CORS-configured on lukk](/transport-modes).
 
-**It is validated at build time.** A `baseURL` that isn't a valid absolute URL fails `nuxt build` / `nuxt prepare` with the offending value in the message, rather than building an app that answers `400` on every auth call. The check requires an `http://` or `https://` scheme — note that `localhost:3000/auth` is *parseable* (as a `localhost:` scheme) but is not a usable base, so it's rejected too.
+**It is validated at build time.** A `baseURL` that isn't a valid absolute URL fails `nuxt build` with the offending value in the message (`nuxt prepare`, which a starter's `postinstall` runs before any secret exists, only logs the error), rather than building an app that answers `400` on every auth call. The check requires an `http://` or `https://` scheme — note that `localhost:3000/auth` is *parseable* (as a `localhost:` scheme) but is not a usable base, so it's rejected too.
 
 > [!WARNING]
-> The fault this catches is an **unset build-time environment variable**. A config like `` baseURL: `${process.env.API_URL}/auth` `` interpolates an undefined variable into the string `"undefined/auth"` — non-empty, so it used to build fine and then fail at runtime. Make sure the variable is present wherever you run `nuxt build` **and** `nuxt prepare` (including CI postinstall steps).
+> The fault this catches is an **unset build-time environment variable**. A config like `` baseURL: `${process.env.API_URL}/auth` `` interpolates an undefined variable into the string `"undefined/auth"` — non-empty, so it used to build fine and then fail at runtime. Make sure the variable is present wherever you run `nuxt build`; a `nuxt prepare` without it (a CI postinstall step, say) logs the same error but carries on.
 
 In `direct` mode a **root-relative** base (`/auth`) is also accepted: the browser resolves it against the current origin, which is the right setup when lukk is served from the same origin as your app. A server-fetched base (`bff` mode) has no valid relative form.
 
@@ -377,7 +446,7 @@ ssrHydrate: true // default; BFF only
 
 In BFF mode the server reads the sealed session and seeds `useLukkAuth().user` / `loggedIn` **during server rendering**, so authenticated pages render logged-in on the first paint — no logged-out→logged-in flash and no `<ClientOnly>`. Only the app `user` resource enters the SSR payload (never a token), and a hydrated render is marked `Cache-Control: no-store`. See [Transport Modes](/transport-modes) for the full rationale.
 
-Set `false` to keep the client-only restore. No effect in `direct` mode (there's no server-side session to read).
+Set `false` to have the client resolve the user instead. The server still renews an aged-out session once before the render — so the render's own app-API requests carry a live token, and a render never rotates the session mid-page — without loading the user, and still marks a render carrying a session `no-store`. A page load after the access token aged out then rotates twice (the server's renewal, then the client's restore), and both count against lukk's [refresh throttle](#rate-limits). No effect in `direct` mode (there's no server-side session to read).
 
 > [!NOTE]
 > Enabling this (the default) means SSR `user` is now populated in BFF mode where it was previously `null` until client hydration. Review any page that assumed the server always renders anonymous.
@@ -409,7 +478,8 @@ BFF-only and opt-in. Forwards `${path}/**` to the **fixed** `target` (your Larav
 - **Step-up tokens are injected server-side.** A route behind lukk's `lukk.confirm` middleware works through this proxy once the user has [confirmed](/confirmation): the token comes from the sealed session, and one sent by the browser is discarded. Rename it with `confirmationHeader` and both proxies follow — the value must be a valid HTTP header name or the build fails.
 - **`target`** is validated at build time exactly like [`baseURL`](#baseurl) — it must be an absolute `http(s)` URL when the proxy is registered. (In `direct` mode `target` isn't proxied but still becomes the app-API base for [`useLukkFetch()`](/use-lukk-fetch), so it's validated there too, where a same-origin `/api` is legitimate. There it is used as written — a relative `/api` is an API served beside the app on the same origin, not a route under its `app.baseURL`, so from lukk-nuxt 0.12.0 it is no longer prefixed with the base.)
 - **`forceJson`** (default `true`) sets `Accept: application/json` on forwarded requests so a JSON API renders clean `401`/`422` JSON for unauthenticated/validation errors — instead of Laravel's default guest-redirect, which 500s behind a proxy. Set `false` to forward the browser's `Accept` instead — only if a route under `path` legitimately serves a non-JSON response.
-- **lukk's own routes are refused.** In the usual layout `api.target` is your Laravel app and `baseURL` is the same app under `/auth`, so `/api/auth/login` would have proxied a sign-in and streamed its `{ access_token, refresh_token }` to the browser — exactly what BFF mode exists to prevent. From lukk-nuxt 0.12.0 a request whose upstream URL falls under lukk's base path answers **`404`**, decided on the URL the way Laravel's router reads it (dot segments collapsed, trailing slash trimmed, repeated slashes merged, `%2F` and other escapes decoded, case-insensitively) and regardless of host — and again after each of up to four further rounds of percent-decoding, so `/api/x/%252e%252e/auth/login` or `/api/%2561uth/login` is refused too, in case a CDN, rewrite rule or second proxy in front of lukk decodes once more (a path still decoding to something new after four rounds is refused outright; "new" is judged on the path as the URL parser re-reads it, so an escape it simply puts back — `%20`, `%22`, `%7B` — settles at once, and `/api/files/Annual%20Report.pdf` is proxied) — since the same app is often named publicly in `api.target` and internally in `baseURL`. A `?` or `#` that a round decodes is read both ways a hop might — cutting the path there, and keeping it as path data — so `/api/x%3F/%252e%252e/auth/login` is refused as well. And because a *chain* of hops (merge slashes, then decode, then collapse) can land where no single reading does, any path in which decoding reveals a whole `.` or `..` segment is refused outright, wherever it would lead: one encoded twice (`/api/x/%252e%252e/y`), one behind an encoded separator h3 leaves encoded (`/api/files/a%2F..%2Fb`, `/api/a%5c..%5cb`), and one a tab, LF or CR splits (`.%2509.`, which the URL parser strips before it collapses dots). A dot inside a segment name — `v1.2`, `.well-known`, `..y` — is unaffected. Call lukk through the composables (the `/api/_lukk` auth proxy) instead. If lukk is mounted at the **root** of `api.target`'s host there is no path that tells the two apart, so the proxy refuses everything — move lukk under a prefix or onto its own host. An unresolvable `baseURL` fails the app-API proxy closed with a `500` naming the setting.
+- **lukk's own routes are refused.** In the usual layout `api.target` is your Laravel app and `baseURL` is the same app under `/auth`, so `/api/auth/login` would have proxied a sign-in and streamed its `{ access_token, refresh_token }` to the browser — exactly what BFF mode exists to prevent. From lukk-nuxt 0.12.0 a request whose upstream URL falls under lukk's base path answers **`404`**, decided on the URL the way Laravel's router reads it (dot segments collapsed, trailing slash trimmed, repeated slashes merged, `%2F` and other escapes decoded, case-insensitively) and regardless of host — and again after each of up to four further rounds of percent-decoding, so `/api/x/%252e%252e/auth/login` or `/api/%2561uth/login` is refused too, in case a CDN, rewrite rule or second proxy in front of lukk decodes once more (a path still decoding to something new after four rounds is refused outright; "new" is judged on the path as the URL parser re-reads it, so an escape it simply puts back — `%20`, `%22`, `%7B` — settles at once, and `/api/files/Annual%20Report.pdf` is proxied) — since the same app is often named publicly in `api.target` and internally in `baseURL`. A `?` or `#` that a round decodes is read both ways a hop might — cutting the path there, and keeping it as path data — so `/api/x%3F/%252e%252e/auth/login` is refused as well. And because a *chain* of hops (merge slashes, then decode, then collapse) can land where no single reading does, any path in which decoding reveals a whole `.` or `..` segment is refused outright, wherever it would lead: one encoded twice (`/api/x/%252e%252e/y`), one behind an encoded separator h3 leaves encoded (`/api/files/a%2F..%2Fb`, `/api/a%5c..%5cb`), and one a tab, LF or CR splits (`.%2509.`, which the URL parser strips before it collapses dots). A dot inside a segment name — `v1.2`, `.well-known`, `..y` — is unaffected. Call lukk through the composables (the `/api/_lukk` auth proxy) instead. If lukk is mounted at the **root** of `api.target`'s host there is no path that tells the two apart, so the proxy refuses everything — move lukk under a prefix or onto its own host. A **PHP front controller** in the path is seen through too: Laravel routes `/index.php/auth/login` like `/auth/login`, so any segment ending in `.php` — `/api/index.php/auth/login`, an app under a sub-path (`/app/index.php/auth/login`), one only a further decoding hop reveals (`/index.php%2Fauth/login`) — is dropped before the comparison, in the request path and in a `baseURL` that names the script itself (`https://host/index.php/auth`) alike, and the path is judged as written as well, so such a segment never hides an encoded separator or `..`. What no path check can see is how your server maps URLs to the script (`SCRIPT_NAME`): shared hosting whose rewrite sends `/public/auth/login` into `public/index.php`, or a front end that trims any URI containing `index.php`. Nor does it know an [extra guard's](/multiple-guards) mount (`admin/auth`) on the same host. The robust layout is an `api.target` — host or prefix — that doesn't serve lukk's routes at all. An unresolvable `baseURL` or `api.target` fails the app-API proxy closed with a `500` naming the setting at fault.
+- **A page render's own requests never rotate the session** (lukk-nuxt 0.12.0). A BFF server plugin marks the page request (`x-lukk-ssr`, removed before anything reaches your API), so every request the render makes — `useLukkFetch`, and Nuxt's own `useFetch('/api/…')`, `useRequestFetch()` and `event.$fetch` alike — carries it, and the proxy forwards it with the token as it is rather than renewing an expired one: a cookie rotated there would go back to the render, never to the browser, which would then replay the consumed token. The render renews once, before it starts ([`ssrHydrate`](#ssrhydrate)). A server **route's** own `event.$fetch('/api/…')` isn't a render and isn't marked; read the session there with `getLukkAccessToken(event)`.
 - **The request target is forwarded as sent.** The query comes from the raw request, and an encoded `?` or `#` in a path segment (`/files/a%3Fb`) stays encoded rather than becoming a real query or fragment upstream. Responses carry `Cache-Control: private, no-store` and `Vary: Cookie`, merged with the upstream's own `Vary`.
 - **Responses can't run as your app** (lukk-nuxt 0.12.0). They're served on the app's origin, so every one carries `X-Content-Type-Options: nosniff`, and one whose `Content-Type` is neither JSON (`application/json`, `application/*+json`) nor `application/pdf` also carries `Content-Security-Policy: sandbox`, added to the upstream's own policy rather than over it. An HTML or SVG document from the API then renders with an opaque origin and no script. JSON is left alone because no browser renders it as a document of this origin (and Firefox's JSON viewer breaks under a sandbox), a PDF because Chromium refuses to show one sandboxed at all. Serve documents that need script from another origin.
 - **`forwardSetCookie`** (default `[]`) is an allow-list of cookie **names** to pass through from the app API to the browser; everything else is stripped. No lukk session cookie is ever forwardable — not this app's, nor a co-hosted app's — whatever the list says. For a hybrid app whose Laravel API sets its own cookie (a locale, a theme) — see [Transport Modes](/transport-modes).
@@ -473,7 +543,7 @@ Use a strongly consistent driver that expires keys itself — Redis, or Upstash 
 
 Each store call is capped at 300 ms, and after a failure the store is left alone for 30 seconds — a slow or unreachable store falls back to the per-process record instead of holding up sign-ins, logouts and page loads. lukk-nuxt reports that once per server process, and warns at startup when the mount name matches no configured `nitro.storage` mount.
 
-`sharedStore` holds only that record. The BFF's [rotation journal](/transport-modes#a-slow-rotation) stays per process whatever you set here — use sticky sessions behind a load balancer.
+`sharedStore` holds only that record — it is not a token store. The BFF's [rotation journal](/transport-modes#a-slow-rotation) stays per process whatever you set here — use sticky sessions behind a load balancer.
 
 With Redis, also tell the client not to queue and retry commands while the connection is down, so each call fails fast instead of running into that cap every time. (The client still logs its own reconnect attempts, `[ioredis] Unhandled error event`, for as long as the outage lasts.)
 
@@ -561,15 +631,17 @@ Once buckets really are per-visitor, lukk keys IPv6 callers on their `/64` rathe
 confirmationHeader: 'X-Lukk-Confirmation'
 ```
 
-The HTTP header that carries a [step-up confirmation token](/confirmation). Change it only if you've changed `confirm.header` on the lukk side — the two must match.
+The HTTP header that carries a [step-up confirmation token](/confirmation). Change it only if you've changed `confirm.header` on the lukk side — the two must match. In BFF mode both proxies inject it from the sealed session; in `direct` mode [`useLukkFetch()`](/use-lukk-fetch) attaches the held token to requests on the API's own origin, never another (lukk-nuxt 0.12.0).
+
+It must be a valid header name that neither the proxies nor the transport already own: not `Authorization`, `Accept`, `Content-Type`, `Cookie` or `Via`, not a forwarding header (`X-Forwarded-*`, `X-Real-IP`, `Forwarded`, …), not a hop-by-hop or Fetch-forbidden one (`Connection`, `Content-Length`, `Origin`, …), and not a `Proxy-` or `Sec-` name. Such a value in `nuxt.config` fails the build; a runtime override (`NUXT_PUBLIC_LUKK_CONFIRMATION_HEADER`) that is one falls back to `X-Lukk-Confirmation`.
 
 ### `storage`
 
 ```ts
-storage: 'cookie'
+storage: 'cookie' // the only accepted value
 ```
 
-The BFF token-storage backend. The default `cookie` is a **stateless sealed cookie** — no server-side store, no Redis, serverless-friendly. You can point it at a [Nitro `useStorage`](https://nitro.build/guide/storage) mount name to keep tokens in a server-side store instead. Ignored in `direct` mode.
+**Reserved.** BFF tokens always live in the stateless sealed session cookie — no server-side store, no Redis, serverless-friendly. The option was never read; from lukk-nuxt 0.12.0 any value but `'cookie'` fails the build, so remove it. For the record of ended sessions shared across instances, use [`session.sharedStore`](#session-sharedstore).
 
 ### Overriding with environment variables
 
@@ -580,5 +652,7 @@ Because the options become Nuxt [runtime config](https://nuxt.com/docs/guide/goi
 | `NUXT_LUKK_SESSION_PASSWORD` | `session.password` (server-only) |
 | `NUXT_LUKK_BASE_URL` | the server-side `baseURL` (BFF) |
 | `NUXT_PUBLIC_LUKK_BASE_URL` | the public `baseURL` (direct) |
+
+The same rule covers the other keys the module writes: `runtimeConfig.lukk.*` (server-only — `NUXT_LUKK_API_TARGET`, `NUXT_LUKK_COOKIE_SECURE`, `NUXT_LUKK_SESSION_MAX_AGE`, `NUXT_LUKK_SHARED_STORE`, `NUXT_LUKK_CLIENT_IP_HEADER`, `NUXT_LUKK_BODY_LIMIT`, …) and `runtimeConfig.public.lukk.*` (`NUXT_PUBLIC_LUKK_USER_ENDPOINT`, `NUXT_PUBLIC_LUKK_CONFIRMATION_HEADER`, …). Build-time checks can't see a runtime override, so a bad one surfaces at request time instead.
 
 Next: **[Authentication](/authentication)**.

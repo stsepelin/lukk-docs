@@ -76,7 +76,7 @@ Call `fetchUser()` to reload it (e.g. after a profile update). With no `user.end
 ### Response shape (`user.key`)
 
 ```ts
-user: { endpoint: '/api/me', key: 'data' } // default
+user: { endpoint: '/api/me', key: 'data' } // `key: 'data'` is the default; `endpoint` has none ('') — set it
 ```
 
 lukk **auto-unwraps a Laravel API-Resource wrapper**: a clean `{ "data": {...} }` (with no `meta`/`links`/`errors` envelope) becomes the user object — so a `UserResource` "just works". A `{ "data": null }` response is treated as logged-out.
@@ -89,7 +89,7 @@ Prefer keeping the resource **flat and lean** (it ships in the SSR HTML): `JsonR
 
 ### Typing the user (`LukkUser`)
 
-`useLukkAuth().user` is typed `LukkUser | null`. lukk pre-declares only what it reads (`email_verified_at` / `email_verified`); augment the interface with your own fields:
+`useLukkAuth().user` is typed `LukkUser | null`. lukk pre-declares only what it reads, all optional: `id`, `email_verified_at` / `email_verified` (the verified state), and `abilities` / `token_pinned` (what [`UserResource`](#userresource-optional) publishes for [abilities](/abilities)). Augment the interface with your own fields:
 
 ```ts
 declare module 'lukk-core' {

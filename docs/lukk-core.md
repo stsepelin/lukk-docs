@@ -25,7 +25,9 @@ const lukk = createLukkClient({
   onTokens: pair => { accessToken = pair.access_token },
   // Return null when not refreshable. (The client also treats a throwing
   // refresh as "not refreshable", but returning null is the documented contract.)
-  refresh: () => lukk.refreshTokens().catch(() => null), // direct mode: relies on the __Host- cookie
+  // Cookie mode (what lukk-nuxt's direct mode uses): no argument, lukk reads its __Host- cookie.
+  // Body mode: pass the refresh token you hold — lukk.refreshTokens(refreshToken).
+  refresh: () => lukk.refreshTokens().catch(() => null),
 })
 
 const result = await lukk.login({ email, password })
@@ -45,7 +47,7 @@ The client attaches the bearer token, and on a `401` it calls `refresh` once and
 | `getAccessToken?` | `() => string \| null \| Promise<…>` | The bearer token to attach. |
 | `getConfirmationToken?` | `() => string \| null \| Promise<…>` | The step-up token for `X-Lukk-Confirmation`. |
 | `refresh?` | `() => Promise<RefreshOutcome>` | Renew on a 401: a `TokenPair`, [`REFRESHED_WITHOUT_TOKEN`](#renewed-without-a-token), or `null` if not refreshable. |
-| `onTokens?` | `(pair) => void` | Persist a freshly-minted pair (login / refresh / passkey login / restore). |
+| `onTokens?` | `(pair) => void` | Persist a freshly-minted pair (register / login / 2FA challenge / passkey login / restore, and the pair a `refresh` hook returns). |
 | `onUnauthenticated?` | `() => void` | Refresh failed — the session is gone. |
 | `confirmationHeader?` | `string` | Header name (default `X-Lukk-Confirmation`). |
 
@@ -73,11 +75,13 @@ const lukk = createLukkClient({
 
 ```ts
 // session
+lukk.register(input)                    // → TokenPair | TwoFactorChallenge | RegistrationPending
 lukk.login(credentials)                 // → TokenPair | TwoFactorChallenge
 lukk.twoFactorChallenge({ challenge_token, code | recovery_code })
-lukk.refreshTokens(refreshToken?)       // direct mode passes the token; cookie mode omits it
-lukk.restore()                          // silent refresh; null when there's no session
+lukk.refreshTokens(refreshToken?)       // body mode passes the token; cookie mode omits it
+lukk.restore()                          // silent refresh; resolves null on ANY failure
 lukk.logout({ retry?, refreshToken? }) // retry: false skips refresh-and-retry on a 401 (renew it yourself)
+lukk.claimSession()                     // POST /session/claim — lukk ≥ 0.7, 404 on older
 lukk.revokeAllSessions()
 lukk.revokeOtherSessions()
 
@@ -86,6 +90,10 @@ lukk.forgotPassword(email)              // → { status: 'password-reset-link-se
 lukk.resetPassword({ token, email, password, password_confirmation })
 lukk.changePassword({ current_password, password, password_confirmation })
 lukk.sendEmailVerification()            // → { status: 'verification-link-sent' } (a 202)
+
+// the account itself (behind step-up)
+lukk.exportAccount()                    // → AccountExport
+lukk.deleteAccount()                    // irreversible; ends this session too
 
 // step-up confirmation
 lukk.confirmPassword(password)          // → { confirmation_token }
@@ -97,7 +105,7 @@ lukk.enableTwoFactor()                  // → { otpauth_uri, recovery_codes }
 lukk.confirmTwoFactor(code)
 lukk.disableTwoFactor()
 lukk.recoveryCodeCount()                // → { remaining, total }
-lukk.regenerateRecoveryCodes()
+lukk.regenerateRecoveryCodes()          // → { recovery_codes }
 
 // passkeys
 lukk.passkeyRegistrationOptions()
@@ -106,17 +114,54 @@ lukk.passkeyLoginOptions()              // → { ceremony_id, options }
 lukk.loginWithPasskey(ceremonyId, credential) // → TokenPair, or a TwoFactorChallenge (lukk ≥ 0.7)
 lukk.listPasskeys()                     // → { passkeys: PasskeySummary[] }
 lukk.deletePasskey(credentialId)
+
+// anything else under baseURL
+lukk.request<T>(path, init?, allowRetry?)
 ```
 
 Every shape is exported as a type (`TokenPair`, `TwoFactorChallenge`, `PasskeyLoginOptions`, …) and [conformance-tested](/architecture#conformance) against real lukk.
+
+**`register(input)`** takes the identifier (`email` or `username`), `password` and `password_confirmation`, plus any extra fields your [registration hooks](/registration) read (the stock create expects a `name`). It resolves like a login — a pair, which is handed to `onTokens`, or a two-factor challenge — or to a `RegistrationPending` (`{ registered: true, requires_verification }`) when the account was created without a session. Narrow it with `isRegistrationPending()` / `isTwoFactorChallenge()`.
+
+**`refreshTokens(refreshToken?)`** depends on lukk's [output mode](/configuration#output-mode). In **body mode** the client holds the refresh token and passes it. In **cookie mode** — which lukk-nuxt's direct mode pairs with — leave it out: lukk reads its `__Host-` cookie. It does not call `onTokens`; your `refresh` hook returns the pair and the client hands it on.
+
+**`restore()`** is the silent refresh for app load: it posts an empty body (cookie mode) and, on success, hands the pair to `onTokens`. It resolves `null` on **any** failure — a `401`, a `429`, a `5xx`, a network error alike — so treat `null` as "no session I could restore", not as "signed out for sure".
+
+**`claimSession()`** confirms that this client received the session a sign-in just issued, for lukk's [unclaimed sessions](/configuration#refresh-behavior) (`claim_seconds`): a session first used after that window is revoked. Any authenticated request to lukk claims too; this one lets a client do it straight away. Older lukk releases answer `404`.
+
+**`exportAccount()` / `deleteAccount()`** sit behind [step-up confirmation](/confirmation) (send the token through `getConfirmationToken`); see [Account Deletion & Export](/account-deletion). `deleteAccount()` revokes every token before it deletes the row, so treat its resolution as "signed out, and the account is gone".
+
+**`request<T>(path, init?, allowRetry = true)`** is the transport every method above uses, for a lukk route the client has no method for. `path` joins onto `baseURL` (an absolute `http(s)` URL passes through); it sets `Accept: application/json` (and a JSON `Content-Type` when there is a body), never follows a redirect, and attaches the bearer, the step-up header and cookies only to a target on `baseURL`'s origin. A non-2xx rejects with a `LukkError`.
 
 **`logout({ refreshToken })`** (lukk-core 0.12.0) presents the session's refresh token in the body. lukk ends a session by the refresh token the client holds — the RFC 7009 shape — so a [body-mode](/configuration#output-mode) binding whose access token has expired can log out without spending a rotation on a fresh bearer first, or while refreshing is throttled or failing. Cookie mode sends lukk's cookie instead, so leave it out there. Older lukk releases ignore it and use the bearer.
 
 **`LukkStatus`** (lukk-core 0.12.0) is the acknowledgement lukk answers the fire-and-forget account calls with: `password-reset-link-sent`, `password-reset`, `password-changed` and `verification-link-sent`. They used to resolve to `void`. `status` is typed `string`, so a lukk release adding a value is not a type error.
 
-`AccountExport` (the [export](/account-deletion) body) has an optional `lockouts` array — `purpose`, `attempts`, and ISO-8601 `locked_at` / `first_failed_at` / `last_failed_at` (each nullable) — for lukk releases that include the lockout counters. `PasskeySummary.last_used_at` is a number (unix seconds), not a string.
+**`AccountExport`** (the [export](/account-deletion#the-export) body) follows lukk 0.7.0. Each `passkeys[]` entry is `credential_id`, `name`, `last_used_at` and the optional `created_at`, `aaguid` (the authenticator model) and `transports` (`string[]`); **its times are ISO-8601 strings**, like every other time in the export, and any may be `null`. lukk 0.6.0 sent `last_used_at` as unix seconds and none of the three optional fields — parse the string rather than multiplying by 1000. The optional `lockouts` array — `purpose`, `attempts`, and ISO-8601 `locked_at` / `first_failed_at` / `last_failed_at` (each nullable) — comes from lukk releases that include the lockout counters. **`PasskeySummary`** from `listPasskeys()` is different: its `last_used_at` is still a number (unix seconds).
 
 `Amr` types the access token's [`amr` claim](/tokens-and-rotation#the-amr-claim): `'pwd' | 'otp' | 'pop' | 'user' | 'mfa'`, the RFC 8176 values lukk 0.7.0 emits. `'webauthn'` is gone (a breaking type change in lukk-core 0.12.0): a passkey session is `pop` + `user`, and `mfa` marks a multi-factor one.
+
+> [!NOTE]
+> **`BffSignInResult` is lukk-nuxt's, not lukk-core's.** In BFF mode lukk-nuxt's `login()`, `register()` and passkey `login()` resolve to the proxy's acknowledgement, `{ ok: true, expires_in? }` — the token pair stays in the sealed session. Their types are `LoginResult | BffSignInResult` (`RegisterResult | BffSignInResult`), so narrow with `'access_token' in result` or `isTwoFactorChallenge()` before reading a token. lukk-core's own methods always resolve to what lukk sent.
+
+## Other Exports
+
+Besides the client and the types above, `lukk-core` exports the helpers its bindings are built from:
+
+| Export | What it does |
+|---|---|
+| `isTwoFactorChallenge(r)`, `isRegistrationPending(r)` | Narrow a `LoginResult` / `RegisterResult`. |
+| `isTokenPair(value)` | The shape gate every token sink uses: an object with a string `access_token`. |
+| `singleFlight(fn)` | Collapse concurrent calls into one in-flight promise (how the client shares a refresh). |
+| `isSameOrigin(base, path)`, `carriesOrigin(path)` | The credential guard: whether a target stays on `base`'s origin, and whether a string carries an origin of its own (a scheme or `//host`), after canonicalising it the way the URL parser does. |
+| `lukkError(status, statusText, body)` | Build a `LukkError` from a Laravel error body. |
+| `retryAfterSeconds(value)` | A `Retry-After` header's delay-seconds, or `undefined` for anything else (the HTTP-date form included). |
+| `shapeUser(raw, key?)`, `isEmailVerified(user)`, `userShapeWarning(user)` | Unwrap a user-endpoint body (a clean `{ data }` or a configured key), read either verification field, and the dev-time "this looks wrapped" diagnostic. |
+| `can`, `cannot`, `canAny`, `canAll`, `normalize`, `enforcesAbilities` | The [abilities](/abilities) matcher — UI hints, never enforcement. |
+| `LUKK_SESSIONS`, `LUKK_ACCOUNT`, `LUKK_ACCOUNT_DELETE` | lukk's own ability names. |
+| `base64urlToBuffer`, `bufferToBase64url` | The [WebAuthn](#webauthn-helpers) encoding primitives. |
+
+Types: `LukkClient` (what `createLukkClient` returns), `LukkClientHooks`, `RefreshOutcome`, `LukkMode` (`'bff' | 'direct'`), `LukkIdentifier` (`{ email } | { username }`), `LoginInput`, `RegisterInput`, `RegisterResult`, `RegistrationPending`, `TwoFactorInput`, `ResetPasswordInput`, `ChangePasswordInput`, `TwoFactorEnrollment`, `RecoveryCodeCount`, `ConfirmationToken`, `PasskeySummary`, `PasskeyLoginOptions`, `AccountExport`, `LukkStatus`, `LukkUser`, `Amr`.
 
 ## Errors
 

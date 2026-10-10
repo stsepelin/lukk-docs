@@ -1,10 +1,10 @@
 # Multiple guards (admin + users)
 
-Some apps serve two audiences that must never mix — a **users** API and an **admins** API. lukk lets each be its own guard with its **own cryptographic token identity**, so a token minted for one can never authenticate on the other. It's opt-in and strictly backward compatible: an app with no `lukk.guards` behaves exactly as a single-guard app.
+Some apps serve two audiences that must never mix — a **users** API and an **admins** API. lukk lets each be its own guard with its **own cryptographic token identity**, so a token minted for one can never authenticate on the other. It's opt-in: an app with no `lukk.guards` behaves exactly as a single-guard app — provided `config/auth.php` maps only one guard to `lukk-jwt`, since a second one with no `lukk.guards` block is refused at boot (below).
 
 ## The problem it solves
 
-Point two guards at the `lukk-jwt` driver naively and they'd share one secret + issuer + audience, differing only by which table the subject id is looked up in. An admin token (`sub=5`) would then verify fine on the users guard and resolve `User::find(5)` — **account takeover by subject-id collision**. lukk closes this by giving each guard a distinct, validated **audience** (the [RFC 8725 §3.9](https://www.rfc-editor.org/rfc/rfc8725.html#section-3.9) / [OWASP ASVS 5.0](https://github.com/OWASP/ASVS) §9.2.3–9.2.4 control), rejecting a foreign token **before** any user is resolved.
+Point two guards at the `lukk-jwt` driver naively and they'd share one secret + issuer + audience, differing only by which table the subject id is looked up in. An admin token (`sub=5`) would then verify fine on the users guard and resolve `User::find(5)` — **account takeover by subject-id collision**. lukk closes this by giving each guard a distinct, validated **audience** (the [RFC 8725 §3.9](https://www.rfc-editor.org/rfc/rfc8725.html#section-3.9) / [OWASP ASVS 5.0](https://github.com/OWASP/ASVS) §9.2.3–9.2.4 control), rejecting a foreign token **before** any user is resolved. The naive setup isn't left to chance either: a `lukk-jwt` guard in `config/auth.php` with no `lukk.guards` block of its own would inherit the default guard's secret *and* audience, so lukk refuses to boot until you give it one.
 
 ## Setup
 
@@ -37,7 +37,9 @@ A guard is declared in two places, joined by its name — the standard Laravel p
 ],
 ```
 
-Everything the guard doesn't declare is **inherited** from the top-level config (ttls, features, cookie, …). The **top-level config is the default guard** (`config('lukk.guard')`, `api`), unchanged.
+Everything the guard doesn't declare is **inherited** from the top-level config (ttls, features, cookie, …). The **top-level config is the default guard** (`config('lukk.guard')`, `api`), unchanged — configure it there, never as an entry under `guards` (lukk refuses to boot on one: its overrides would be ignored while still switching multi-guard mode on).
+
+`audience` is taken as written here. Unlike the top-level `LUKK_AUDIENCE`, a per-guard `env()` value is not split on commas, so `LUKK_ADMIN_AUDIENCE=a,b` is one audience named `a,b` — list several as an array (`'audience' => ['https://admin.example.com', 'https://ops.example.com']`).
 
 A guard can harden itself — say, an admin guard with the [account lockout](/account-lockout) on and tighter login caps:
 
@@ -53,7 +55,7 @@ A guard can harden itself — say, an admin guard with the [account lockout](/ac
 ],
 ```
 
-From lukk 0.7.0 `features.lockout`, the `lockout` block, `rate_limits.login.*` and `rate_limits.two_factor.*` are read **per guard**. Earlier releases read them from the global block, so an override like this was silently ignored. The same release reads these per guard too: `features.logout_all`, `features.two_factor` (where only an explicit `false`, `0` or `'0'` switches enforcement off), `email_verification.block_unverified_login`, `cookie_mode` when logout clears the cookie, `claim_seconds`, `login_timebox_micros` and `confirm.mfa_max_age`.
+From lukk 0.7.0 `features.lockout`, the `lockout` block, `rate_limits.login.*` and `rate_limits.two_factor.*` are read **per guard**. Earlier releases read them from the global block, so an override like this was silently ignored. The same release reads these per guard too: `features.logout_all`, `features.two_factor` (where only an explicit `false`, `0` or `'0'` switches enforcement off), `email_verification.block_unverified_login`, `cookie_mode` when logout clears the cookie, `claim_seconds`, `login_timebox_micros`, `confirm.mfa_max_age`, `two_factor.challenge_ttl`, `confirm.ttl` and `confirm.header` — the last being the header of the guard that authenticated the request, so a guard with its own needs its clients to send the confirmation there.
 
 Generate a per-guard secret:
 
@@ -114,7 +116,7 @@ Protect admin routes with `auth:admin`; they resolve against the `admins` table 
 
 ### Separate keys vs. a shared secret
 
-Per the standards, a **shared secret + distinct audience is a fully compliant control** (ASVS §9.2.4; RFC 8725 lists key-separation and audience-differentiation as co-equal). Separate per-guard `secret`/keys are the stronger **defense-in-depth** option. Either way, the **audience is what isolates the tokens**, so lukk **refuses to boot** unless every guard declares a distinct, non-empty audience and mounts at a distinct path/domain — and unless every extra guard is declared in `config/auth.php`.
+Per the standards, a **shared secret + distinct audience is a fully compliant control** (ASVS §9.2.4; RFC 8725 lists key-separation and audience-differentiation as co-equal). Separate per-guard `secret`/keys are the stronger **defense-in-depth** option. Either way, the **audience is what isolates the tokens**, so lukk **refuses to boot** unless every guard declares a distinct, non-empty audience and mounts at a distinct path/domain — and unless every extra guard is declared in `config/auth.php` with the `lukk-jwt` driver, every `lukk-jwt` guard there has a `lukk.guards` block (the default guard excepted), and no block is named after the default guard. A numeric guard name, or a list of names instead of a `name => [...]` map, is refused too (lukk 0.7.0).
 
 ## Path vs. subdomain
 

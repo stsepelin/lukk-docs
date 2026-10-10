@@ -29,7 +29,7 @@ Access tokens are signed with a 256-bit secret. Generate one into `.env`:
 php artisan lukk:secret
 ```
 
-It behaves like `key:generate`: no flag writes `LUKK_SECRET` (prompting before overwrite), `--force` overwrites silently, `--show` prints it instead.
+It behaves like `key:generate`: no flag writes `LUKK_SECRET` (prompting before overwrite), `--force` overwrites silently, `--show` prints it instead. `--guard=admin` writes an [extra guard's](/multiple-guards) own `LUKK_ADMIN_SECRET`.
 
 > [!WARNING]
 > Treat `LUKK_SECRET` like `APP_KEY` — never commit it. Rotating it invalidates every access token signed with the old value (refresh tokens are opaque and unaffected, so clients recover on their next refresh).

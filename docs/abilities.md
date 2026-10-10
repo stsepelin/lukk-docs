@@ -2,7 +2,7 @@
 
 Coarse, stateless authorization carried **in the access token**. `Lukk::abilitiesUsing()` decides what a user's tokens may do, `lukk.ability:` gates a route on it, and `$user->tokenCan()` answers the same question in your own code.
 
-It is **inert until you configure it**: without a callback no `scope` claim is minted at all, and tokens stay byte-identical to 0.5.0. Once configured it is **deny by default** — a token with no `scope` grants nothing.
+It is **inert until you configure it**: without a callback no `scope` claim is minted for an ordinary sign-in, and no `pin` claim either — only a session you [pin](#derived-vs-pinned-grants) yourself carries one. Once configured it is **deny by default** — a token with no `scope` grants nothing.
 
 The wire format is the registered `scope` claim, space-delimited ([RFC 6749 §3.3](https://datatracker.ietf.org/doc/html/rfc6749#section-3.3), [RFC 9068 §2.2.3](https://datatracker.ietf.org/doc/html/rfc9068#section-2.2.3)), so an API gateway or a non-lukk verifier can read it without knowing anything about lukk.
 
@@ -31,13 +31,25 @@ Route::middleware(['auth:api', 'lukk.abilities:orders.read,orders.write']) // AL
     ->post('/orders', [OrderController::class, 'store']);
 ```
 
-The two aliases mirror Sanctum's split, so the semantics are the ones you already expect. In your own code:
+The two aliases mirror Sanctum's split, so the semantics are the ones you already expect. In your own code, add the `HasTokenAbilities` trait to the user model — it is not part of `HasRefreshTokens`:
+
+```php
+use Lukk\Concerns\HasTokenAbilities;
+
+class User extends Authenticatable
+{
+    use HasRefreshTokens;
+    use HasTokenAbilities;
+}
+```
 
 ```php
 if ($request->user()->tokenCan('orders.write')) {
     // ...
 }
 ```
+
+The trait adds `tokenCan()`, `tokenCannot()` and `tokenAbilities()`, all read from the **current request's** token rather than from the model, so the same user on two devices can hold different grants. Outside an authenticated request (a queued job, a console command) nothing is granted. It satisfies the `Lukk\Contracts\HasTokenAbilities` interface; implement that too (aliased, since the names match — `use Lukk\Contracts\HasTokenAbilities as HasTokenAbilitiesContract;`) if you want to type-hint it or let static analysis check it.
 
 ## Naming abilities
 
@@ -74,6 +86,7 @@ Lukk::abilitiesUsing(function (int|string $userId, TokenContext $context) {
     // $context->guard     — which guard this token is being minted for
     // $context->userId    — the subject
     // $context->familyId  — the session, stable across every rotation
+    // $context->pinned    — always false here: a pinned grant never asks the callback
 
     return $context->guard === 'admin'
         ? Admin::find($userId)->permissionNames()
@@ -148,7 +161,7 @@ $pair = app(StartSession::class)($user->getKey(), [], ['ci.deploy', Abilities::S
 | Situation | Status | |
 |---|---|---|
 | No credential reached the gate | `401` | so a client learns it needs to log in, rather than giving up |
-| Authenticated, insufficient scope | `403` | with `WWW-Authenticate: Bearer error="insufficient_scope", scope="…"` ([RFC 6750 §3.1](https://datatracker.ietf.org/doc/html/rfc6750#section-3.1)) |
+| Authenticated, insufficient scope | `403` | with `WWW-Authenticate: Bearer error="insufficient_scope", error_description="…", scope="…"` ([RFC 6750 §3.1](https://datatracker.ietf.org/doc/html/rfc6750#section-3.1)) |
 
 A refusal dispatches `Lukk\Events\TokenAbilityDenied`, carrying the subject, guard, family and the **route's** requirement — never the caller's granted list. A token probing for what it can still reach looks exactly like a run of these, and it is the only lukk-side signal that one is. Deliberately an event rather than a log line: ability names travel widely enough already.
 
@@ -157,7 +170,15 @@ A refusal dispatches `Lukk\Events\TokenAbilityDenied`, carrying the subject, gua
 lukk's `UserResource` publishes the token's abilities, which is the only channel a BFF-mode client has — the browser never sees the access token that carries the claim.
 
 ```ts
-const { can, cannot, canAny, canAll, enforced } = useLukkAbilities()
+const {
+  can, cannot, canAny, canAll, // (ability | list) => boolean
+  abilities,                   // ComputedRef<string[] | undefined> — the normalized grant, undefined when abilities aren't in use
+  enforced,                    // ComputedRef<boolean> — the server uses abilities
+  pinned,                      // ComputedRef<boolean> — this session's grant is pinned (a machine token)
+  canManageSessions,           // ComputedRef<boolean> — lukk.sessions routes will be accepted
+  canManageAccount,            // ComputedRef<boolean> — step-up and change-password will be accepted
+  canDeleteAccount,            // ComputedRef<boolean> — erasure and export will be accepted
+} = useLukkAbilities()
 ```
 
 ```vue
@@ -173,20 +194,24 @@ resource actually publishes `abilities`.
 
 **Absent and empty mean different things.** No `abilities` key means "this server doesn't use abilities" and `can()` returns `true` — so an app that upgrades without opting in doesn't find its UI blanked. An empty array means "in use, and this token was granted nothing", and `can()` returns `false`. `enforced` tells the two apart. A malformed value fails closed, and a logged-out visitor is granted nothing.
 
+Gate lukk's own actions on `canManageSessions` / `canManageAccount` / `canDeleteAccount`, not on `can('lukk.sessions')`: lukk's gates apply to pinned tokens only, and a human login's derived grant never contains those names, so `can()` would hide "sign out other devices" from every ordinary user. The three are `true` for any signed-in non-pinned session, and for a pinned one only when it holds the ability (`lukk.account` does not satisfy `canDeleteAccount`).
+
 The client matcher mirrors the server's rules exactly, and lukk's conformance suite runs both against the same gates on a live instance and requires them to agree, so the two cannot drift.
 
 ## Multiple guards
 
-`features.abilities` and `features.gate_auth_routes` are read through the **active guard's** resolved config, so you can enable either for one guard alone:
+`features.abilities` and `features.gate_auth_routes` are read through the **active guard's** resolved config, so you can set either for one guard alone — for example, publish a pinned-only grant on the admin guard:
 
 ```php
 'guards' => [
     'admin' => [
         // ...
-        'features' => ['gate_auth_routes' => true],
+        'features' => ['abilities' => true],
     ],
 ],
 ```
+
+(`gate_auth_routes` already defaults to `true`, so a per-guard override is only useful to switch it *off* for one guard.)
 
 ## Feature flag
 
