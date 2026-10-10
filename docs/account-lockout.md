@@ -136,7 +136,7 @@ php artisan lukk:release 42 --purpose=confirm
 php artisan lukk:release user@example.com --guard=admin
 ```
 
-`--purpose` is `login` (default), `two_factor`, or `confirm`. `--guard` defaults to lukk's configured guard — locks are stamped with the guard that recorded them, so on a [multi-guard](/multiple-guards) app you must name the right one. The command normalizes the subject exactly the way the failure path recorded it, so pasting an address straight out of a support ticket works. It exits non-zero when no matching lock was found.
+`--purpose` is `login` (default), `two_factor`, or `confirm`. `--guard` defaults to lukk's configured guard — locks are stamped with the guard that recorded them, so on a [multi-guard](/multiple-guards) app you must name the right one. The command normalizes the subject exactly the way the failure path recorded it, so pasting an address straight out of a support ticket works. It says what it did: `Released the login lock on [user@example.com].` when a lock was held (and `AccountReleased` fires), or `No login lock was held for [user@example.com]; cleared its failure count.` when only a counter below the cap — or a lock already past `release_after` — was cleared. Both exit `0`; it exits non-zero when nothing matched at all. (lukk 0.7.0 — earlier releases printed "Released" in both cases; adjust a script that matches on it.)
 
 ## Pruning
 
