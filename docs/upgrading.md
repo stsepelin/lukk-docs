@@ -293,8 +293,8 @@ Sessions and rotation:
   cookie carrying the pair actually leaves: the auth proxy's `/refresh` and 401 retry, a step-up
   confirmation, the app-API proxy when the upstream answers (or on its `502`), an SSR render when the page
   is done — set outright on the first delivery, after that only ever brought forward, never past the next
-  link's end. An app-API request whose browser went away before the upstream answered delivers nothing,
-  so its link stays held. At delivery a caller seals the newest pair if the session rotated the one it was
+  link's end. A response whose browser went away before it could be sent (aborted request, destroyed
+  response or socket) delivers nothing at any delivery point, so its link stays held. At delivery a caller seals the newest pair if the session rotated the one it was
   handed — or, if the session has moved past it and the links that led on are gone, withholds its cookie
   so the browser keeps the newer one: `/api/_lukk/refresh` and a step-up then answer **`409`** (the step-up
   is not recorded, and the user confirms again). The BFF remembers each session's newest refresh token for
