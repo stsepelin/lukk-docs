@@ -29,8 +29,16 @@ The event carries two readonly properties, `$familyId` and `$reason`. The `reaso
 
 A replayed token whose family is **already** revoked is rejected quietly, without this event — the family is gone, so there's nothing left to protect or report.
 
+From **lukk 0.7.0 it also fires from `POST /auth/logout`**, which now accepts a refresh token ([see why](/authentication#logging-out)). A logout presenting a consumed token past the grace window is the same signal as presenting it at `/refresh`, and the decision follows rotation's order exactly — revoked, then expired, then consumed past grace — so a token `/refresh` would call reuse is reported as reuse here too, and a merely stale one is not. The logout itself still answers `204` whatever the event says: it reveals nothing to the caller. A logout *retried* after the session already ended fires nothing — the family is revoked, so it is rejected quietly like any other replay into a dead family. What does reach your alerting is a client logging out with a refresh token its own session rotated past long ago: a stale cookie in a tab left open, or a browser that held onto one while another path rotated it.
+
 > [!IMPORTANT]
 > The revoke-then-dispatch happens **after** the rotation transaction commits, so the family revocation and the event stay consistent. See [Tokens & Rotation](/tokens-and-rotation) for the reuse-detection mechanics and the grace window that keeps normal concurrency from tripping a false revoke.
+
+### SessionUnclaimed
+
+**lukk 0.7.0.** With [`claim_seconds`](/configuration#refresh-behavior) on, `Lukk\Events\SessionUnclaimed` fires when a session's first use comes after its claim window, and lukk revokes that session. It carries `$familyId` and `$guard`.
+
+Unlike [`RefreshTokenReused`](#refreshtokenreused), this is not a theft signal: the usual cause is a sign-in whose response never reached its client. Log it, but don't page anyone.
 
 ### RefreshFamilyForked
 

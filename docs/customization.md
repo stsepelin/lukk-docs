@@ -70,6 +70,9 @@ use App\Models\RefreshToken;
 Lukk::useRefreshTokenModel(RefreshToken::class);
 ```
 
+> [!NOTE]
+> **`$timestamps = false` is safe here.** [`claim_seconds`](/configuration#refresh-behavior) recognises a session's original refresh token by its lineage — the row persisted with no predecessor — not by `created_at`, and the window itself is measured from the marker lukk wrote at sign-in. Timestamps are still worth keeping for the data-subject export, which reports when each session began.
+
 ## Swapping storage
 
 Refresh-token **storage** sits behind `Contracts\RefreshTokenRepository`, separate from the rotation **policy** (which lives in `Actions\RotateRefreshToken`). To move storage from the database to Redis, bind your own implementation — the policy is untouched:
@@ -80,6 +83,12 @@ use App\Auth\RedisRefreshTokenRepository;
 
 $this->app->bind(RefreshTokenRepository::class, RedisRefreshTokenRepository::class);
 ```
+
+Three fields on `RefreshTokenRecord` carry policy that the repository is the only thing able to supply, and all of them fail quietly if you leave them out:
+
+- **`original`** — whether this row is the family's first, the one you were handed with a `null` `$previousId`. It is how [`claim_seconds`](/configuration#refresh-behavior) recognises the refresh token the sign-in itself issued, and it is the field to return. It is a tri-state: leave it `null` ("I can't say") and lukk falls back to `createdAt`. Never answer `true` for a row you are unsure about — a successor reported as the original is a session in active use being logged out.
+- **`createdAt`** — the row's creation time, and the fallback for `claim_seconds` when `original` is unknown. It only compares mint times, so a successor minted within a couple of seconds of the sign-in reads as the original; that tolerance is a fixed constant, deliberately not `leeway` (both timestamps come from the same server in one sign-in, so only write skew has to be absorbed). Leave **both** fields out and the revocation is disabled entirely (lukk logs one warning per worker process and carries on).
+- **`scope`** — the family's pinned [ability](/abilities) grant. `null` and `''` are different answers: `null` means *derive the grant on every mint*, `''` means *pinned to nothing*. Round-trip the empty string. Collapsing the two lets the most restricted token in the system widen to its subject's full grant on the first refresh.
 
 ## Reshaping responses
 
@@ -93,6 +102,18 @@ $this->app->bind(LoginResponse::class, MyLoginResponse::class);
 ```
 
 The response contracts are `LoginResponse`, `RefreshResponse`, `LogoutResponse`, and `TwoFactorChallengeResponse`.
+
+> [!WARNING]
+> **`LogoutResponse` takes `bool $clearRefreshCookie` (lukk 0.7.0), and a rebound implementation must honour it.** It is `false` when `POST /auth/logout` did not accept the refresh cookie from that request — none was presented, or the request had a shape a cross-site form could produce. Sending the clearing `Set-Cookie` anyway re-opens the forced-logout CSRF the check exists to close: a clearing cookie on a `204` is stored even after a fully cross-site top-level navigation, so any page could sign your visitors out.
+>
+> ```php
+> public function __construct(private readonly bool $clearRefreshCookie = true) {}
+> ```
+>
+> Read `cookie_mode` through `Lukk::guardConfig()` rather than the global config block, as the default does — read globally, a guard that opted into cookie mode is never sent the clear for the cookie its own login set.
+
+> [!NOTE]
+> **`DELETE /auth/sessions/others` no longer goes through `LogoutResponse`** (lukk 0.7.0). That route keeps the caller's session alive, while the contract's job is to end it — in cookie mode it cleared the caller's own refresh cookie, and the client could no longer refresh. It now answers a bare `204` directly: the same status and empty body as before, so no client changes, but a rebound `LogoutResponse` no longer applies there. It still shapes `POST /auth/logout` and `DELETE /auth/sessions`.
 
 > [!NOTE]
 > The default response shape is the contract the lukk-js clients consume. If you reshape it, keep the client in sync (or adapt it) so the two don't drift — see [Authentication](/authentication) and [Using lukk-core](/lukk-core).
