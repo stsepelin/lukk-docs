@@ -54,12 +54,24 @@ This emits `{ "data": { "id": …, "email_verified": …, "name": …, "roles": 
 
 ```vue
 <template>
-  <p v-if="loggedIn">Signed in as {{ user.email }}</p>
+  <p v-if="loggedIn">Signed in as {{ user?.email }}</p>
   <LoginForm v-else />
 </template>
 ```
 
-Call `fetchUser()` to reload it (e.g. after a profile update). With no `user.endpoint` configured, `user` stays `null` and you can drive `loggedIn` yourself.
+On a server-rendered page that the server didn't hydrate, a template reading `loggedIn` renders signed-out on the server and signed-in on the client once the restore finishes — a hydration mismatch. Wrap it in `<ClientOnly>` there, or see [Waiting for the session](/authentication#waiting-for-the-session-ready).
+
+`user` is typed as `LukkUser`, which declares only what lukk knows about. Augment it with your own fields so `user.value?.email` type-checks:
+
+```ts
+// types/lukk.d.ts
+declare module 'lukk-core' {
+  interface LukkUser { email: string, name: string }
+}
+export {}
+```
+
+Call `fetchUser()` to reload it (e.g. after a profile update). With no `user.endpoint` configured, `user` stays `null` and `loggedIn` stays `false` — it's computed from `user`, not something you set.
 
 ### Response shape (`user.key`)
 

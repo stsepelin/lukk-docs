@@ -44,7 +44,7 @@ The `reason` key exists so a client can tell the two 423s apart. The plain "requ
 
 A step-up asserts "the person at this keyboard re-proved themselves just now". Bound to the subject alone it was instead bearer authority across **every** token that user held — so a machine token with a [pinned grant](/abilities), which can never earn a confirmation itself because the earning routes are ability-gated, could present the one the user's browser earned and act with it.
 
-**Rotation does not invalidate it.** The binding is to the family, not to an individual access token, and a family survives refresh — so a token rotating mid-window keeps its confirmation. [BFF mode](/transport-modes#bff) is unaffected for the same reason. A *new login* does start a new family, and the BFF discards the stored confirmation when it captures a new token pair.
+**Rotation does not invalidate it.** The binding is to the family, not to an individual access token, and a family survives refresh — so a token rotating mid-window keeps its confirmation. [BFF mode](/transport-modes#bff-mode) is unaffected for the same reason. A *new login* does start a new family, and the BFF discards the stored confirmation when it captures a new token pair.
 
 ::: tip Verify-only and co-issuer topologies
 Matching is strict, which is what keeps a [co-issuer](/deployment#splitting-auth-and-api) working: a token minted by another service sharing the secret carries no family, and neither does a confirmation earned by it, so the two still match. What is refused is an *unbound* confirmation presented by a token that does have a family.
@@ -168,7 +168,9 @@ await confirmPassword(currentPassword)
 // confirmed.value === true
 ```
 
-A wrong password throws a typed [`LukkError`](/lukk-core#errors). Call `clear()` to drop the confirmation early (it also clears on [logout](/authentication#logout)).
+A wrong password throws a typed [`LukkError`](/lukk-core#errors). Call `clear()` to drop the confirmation early (it also clears on [logout](/authentication#logging-out-1)).
+
+In BFF mode, a confirmation can also reject with **`409`** when the session that asked for it was replaced by a sign-in (or ended by a logout, perhaps in another tab) while the request was out. The confirmation belonged to that session, so the proxy doesn't store it; re-confirm once the page shows the current session.
 
 ### Confirming with a passkey
 

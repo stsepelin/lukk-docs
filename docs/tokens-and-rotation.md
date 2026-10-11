@@ -106,7 +106,7 @@ Within `grace_seconds`, lukk **detects** that replay and deliberately does **not
 
 ### How the client experiences it
 
-The client never asks you to manage any of this. On a `401` it calls refresh once and retries the original request, and concurrent 401s are collapsed into a **single in-flight refresh** (`singleFlight`) — a page firing ten requests at once triggers one refresh, not ten. In BFF mode the proxy single-flights its server-side refresh per session for the same reason. Both dovetail with the grace window above, so a rotated refresh token is never replayed into a false family revocation. See [Transport Modes](/transport-modes) for the per-mode details.
+The client never asks you to manage any of this. On a `401` it calls refresh once and retries the original request (a sign-in call excepted — its `401` is the answer), and concurrent 401s are collapsed into a **single in-flight refresh** (`singleFlight`) — a page firing ten requests at once triggers one refresh, not ten. In BFF mode the proxy single-flights its server-side refresh per session for the same reason. Both dovetail with the grace window above, so a rotated refresh token is never replayed into a false family revocation. See [Transport Modes](/transport-modes) for the per-mode details.
 
 ## The denylist and revocation
 

@@ -89,6 +89,9 @@ By default an unverified user **logs in normally** and you gate the sensitive ro
 
 Now login returns **403** for an unverified `MustVerifyEmail` user and issues no tokens. The check runs only *after* a successful credential check, so it never affects the constant-time unknown-user / wrong-password path.
 
+> [!WARNING]
+> **Up to lukk 0.6, two-factor login bypassed this block.** The check ran after the two-factor challenge was issued, and the challenge route started a session without it — so an unverified user who had enrolled a second factor still got tokens. From 0.7.0 login refuses before issuing a challenge, and redemption refuses too.
+
 ### Split-domain (SPA / BFF)
 
 The email link points at the **API** and redirects to your **SPA** (`frontend_url`), so it works in both direct and BFF deployments without a cross-origin round-trip:

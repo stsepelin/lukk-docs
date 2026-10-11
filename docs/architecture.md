@@ -75,7 +75,7 @@ The proxy is the only mode-specific code; the composables don't know which mode 
 
 ### Refresh & retry
 
-When a request returns `401`, the client calls `refresh` once and retries the original request with the new token. Concurrent 401s — common under SSR or a burst of parallel requests — are collapsed into a **single in-flight refresh** (`singleFlight`), so a page that fires ten requests at once triggers one refresh, not ten. The BFF proxy single-flights its server-side refresh per session for the same reason. Both dovetail with lukk's [grace window](/tokens-and-rotation#the-grace-window), which tolerates concurrent refreshes without treating them as token reuse.
+When a request returns `401`, the client calls `refresh` once and retries the original request with the new token — except a sign-in call, whose `401` is the server's answer rather than an expired token. Concurrent 401s — common under SSR or a burst of parallel requests — are collapsed into a **single in-flight refresh** (`singleFlight`), so a page that fires ten requests at once triggers one refresh, not ten. The BFF proxy single-flights its server-side refresh per session for the same reason. Both dovetail with lukk's [grace window](/tokens-and-rotation#the-grace-window), which tolerates concurrent refreshes without treating them as token reuse.
 
 ## Mapping the two halves
 

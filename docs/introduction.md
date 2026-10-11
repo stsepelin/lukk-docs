@@ -32,7 +32,7 @@ HS256 (a shared secret) is the right default while your app is the only thing ve
 | Package | What it is |
 |---|---|
 | **lukk** | The Laravel package (`Lukk\` namespace). One runtime dependency ([`firebase/php-jwt`](https://github.com/firebase/php-jwt)); optional 2FA and passkeys each add one library, only when enabled. |
-| **lukk-core** | Framework-agnostic TypeScript: the contract **types**, an auth **client** (`createLukkClient`) that attaches tokens and refreshes on a 401 with single-flight, and **WebAuthn helpers**. No runtime dependencies. |
+| **lukk-core** | Framework-agnostic TypeScript: the contract **types**, an auth **client** (`createLukkClient`) that attaches tokens and refreshes on a 401 with single-flight (sign-in calls excepted), and **WebAuthn helpers**. No runtime dependencies. |
 | **lukk-nuxt** | A Nuxt 3/4 module built on `lukk-core`: auto-imported composables, route middleware, the BFF proxy, and the transport wiring. |
 
 On Nuxt, install `lukk-nuxt` and never touch `lukk-core` directly. On another framework (or none), use `lukk-core` — see [Using lukk-core](/lukk-core).

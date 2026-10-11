@@ -34,7 +34,7 @@ if (isTwoFactorChallenge(result)) {
 }
 ```
 
-The client attaches the bearer token, and on a `401` it calls `refresh` once and retries the original request — concurrent 401s share a **single** in-flight refresh.
+The client attaches the bearer token, and on a `401` it calls `refresh` once and retries the original request — concurrent 401s share a **single** in-flight refresh. The sign-in calls (`login`, `register`, `twoFactorChallenge`, `loginWithPasskey`) are the exception: they don't authenticate with the current session, so their `401` is the answer and they reject with it.
 
 ## The Hooks
 
@@ -59,7 +59,7 @@ lukk.login(credentials)                 // → TokenPair | TwoFactorChallenge
 lukk.twoFactorChallenge({ challenge_token, code | recovery_code })
 lukk.refreshTokens(refreshToken?)       // direct mode passes the token; cookie mode omits it
 lukk.restore()                          // silent refresh; null when there's no session
-lukk.logout()
+lukk.logout({ retry? })                 // retry: false skips refresh-and-retry on a 401 (renew it yourself)
 lukk.revokeAllSessions()
 lukk.revokeOtherSessions()
 
