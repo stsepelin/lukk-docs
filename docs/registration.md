@@ -17,7 +17,7 @@ Registration reuses the exact login machinery. `POST /auth/register`:
 4. **Responds** the same way login does:
    - a **token pair** (auto-login), honoring BFF vs cookie mode, or
    - a **2FA challenge** if the new user is already enrolled (`{ two_factor: true, challenge_token }`), or
-   - a **`201`** `{ registered: true, requires_verification: true }` with **no session** when `email_verification.block_unverified_login` is on — the user verifies their email, then logs in.
+   - a **`201`** `{ registered: true, requires_verification: true }` with **no session** when the new user must verify first — `features.email_verification` and `email_verification.block_unverified_login` both on, and the model `MustVerifyEmail` with the address not yet verified. The user verifies their email, then logs in. (`registration.login` off gives the same `201` — see [Endpoints](#endpoints).)
 
 ### Setup
 
@@ -97,7 +97,7 @@ Lukk::registerValidation(fn ($request) => [
 ]);
 ```
 
-The default rules (`RegisterRequest`) are `name` (required), the identifier (a valid, **unique** address when it is `email`), and `password` (a string, `confirmed`, at most 255 characters, free of NUL bytes, at most 72 bytes under bcrypt, and meeting `Password::defaults()`). Tune password strength app-wide with `Password::defaults()` — see [Password policy](/security#password-policy).
+The default rules (`RegisterRequest`) are `name` (required, valid UTF-8, no NUL byte), the identifier (a valid, **unique** address when it is `email`, and free of the [invisible characters](/authentication#identifier-characters) sign-in refuses — an account registered with one could never sign in), and `password` (a string, `confirmed`, at most 255 characters, free of NUL bytes, at most 72 bytes under bcrypt, and meeting `Password::defaults()`). Tune password strength app-wide with `Password::defaults()` — see [Password policy](/security#password-policy).
 
 A `registerValidation()` hook **replaces** the default rules, and so does a rebound `RegisterRequest` subclass that overrides `rules()`. Whatever rule set is in force, lukk 0.7.0 still applies three password checks after it: the password must be a string (a JSON number or an array used to be cast and stored, or to `500` in the default create — lukk no longer leans on `Password::defaults()` to say so), contain no NUL byte (`Hash::make` throws on one — a `500` on a public route), and, while lukk's own create runs, under bcrypt be at most 72 bytes — a `422` each, on `password`. bcrypt reads only the first 72 bytes, so a longer password would be stored truncated and any string sharing that prefix would sign in (NIST SP 800-63B-4 §3.1.1.2); with Laravel's `hashing.bcrypt.limit` on it was a `500` instead. Other drivers pass the length check untouched. The checks run only for a password that is present and passed your own rules, so a set that doesn't require one still decides that itself. (A rebound subclass overriding `rules()` gets them too — it used to skip all three.)
 
@@ -186,7 +186,7 @@ async function submit() {
 
 `register()` resolves to a `RegisterResult | BffSignInResult`: in BFF mode a session comes back as the proxy's `{ ok: true, expires_in }` rather than a token pair, so narrow with `in` (as above) rather than reading `access_token`. `lukk-core` also exports `isRegistrationPending()` and `isTwoFactorChallenge()` for code that holds a plain `RegisterResult` (a `lukk-core` client of your own).
 
-Because a successful register returns the same token pair as login, the session is established for you — no separate login call. When no session is issued (`registration.login` off, or `block_unverified_login` on), `register()` resolves to `{ registered: true, requires_verification }` and loads no user; route on `requires_verification` to a "check your inbox" page or to your login page, and pair it with [`useLukkEmailVerification`](/email-verification) to resend the link.
+Because a successful register returns the same token pair as login, the session is established for you — no separate login call. When no session is issued (`registration.login` off, or `block_unverified_login` withholding it from an unverified `MustVerifyEmail` user), `register()` resolves to `{ registered: true, requires_verification }` and loads no user; route on `requires_verification` to a "check your inbox" page or to your login page, and pair it with [`useLukkEmailVerification`](/email-verification) to resend the link.
 
 [`useLukkForm`](/use-lukk-form) can't post here: it resolves URLs against your **app's** API base, not lukk's auth base, so `form.post('/register')` would reach your own route. Bind the `LukkError.errors` bag that `register()` rejects with, as above.
 

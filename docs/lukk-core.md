@@ -125,7 +125,7 @@ Every shape is exported as a type (`TokenPair`, `TwoFactorChallenge`, `PasskeyLo
 
 **`refreshTokens(refreshToken?)`** depends on lukk's [output mode](/configuration#output-mode). In **body mode** the client holds the refresh token and passes it. In **cookie mode** — which lukk-nuxt's direct mode pairs with — leave it out: lukk reads its `__Host-` cookie. It does not call `onTokens`; your `refresh` hook returns the pair and the client hands it on.
 
-**`restore()`** is the silent refresh for app load: it posts an empty body (cookie mode) and, on success, hands the pair to `onTokens`. It resolves `null` on **any** failure — a `401`, a `429`, a `5xx`, a network error alike — so treat `null` as "no session I could restore", not as "signed out for sure".
+**`restore()`** is the silent refresh for app load: it posts `{}` as JSON (cookie mode — lukk 0.7.0 refuses a cookie refresh without a JSON body or a same-origin `Sec-Fetch-Site`, with `415`) and, on success, hands the pair to `onTokens`. It resolves `null` on **any** failure — a `401`, a `429`, a `5xx`, a network error alike — so treat `null` as "no session I could restore", not as "signed out for sure".
 
 **`claimSession()`** confirms that this client received the session a sign-in just issued, for lukk's [unclaimed sessions](/configuration#refresh-behavior) (`claim_seconds`): a session first used after that window is revoked. Any authenticated request to lukk claims too; this one lets a client do it straight away. Older lukk releases answer `404`.
 
@@ -142,7 +142,7 @@ Every shape is exported as a type (`TokenPair`, `TwoFactorChallenge`, `PasskeyLo
 `Amr` types the access token's [`amr` claim](/tokens-and-rotation#the-amr-claim): `'pwd' | 'otp' | 'pop' | 'user' | 'mfa'`, the RFC 8176 values lukk 0.7.0 emits. `'webauthn'` is gone (a breaking type change in lukk-core 0.12.0): a passkey session is `pop` + `user`, and `mfa` marks a multi-factor one.
 
 > [!NOTE]
-> **`BffSignInResult` is lukk-nuxt's, not lukk-core's.** In BFF mode lukk-nuxt's `login()`, `register()` and passkey `login()` resolve to the proxy's acknowledgement, `{ ok: true, expires_in? }` — the token pair stays in the sealed session. Their types are `LoginResult | BffSignInResult` (`RegisterResult | BffSignInResult`), so narrow with `'access_token' in result` or `isTwoFactorChallenge()` before reading a token. lukk-core's own methods always resolve to what lukk sent.
+> **`BffSignInResult` is lukk-nuxt's, not lukk-core's.** In BFF mode lukk-nuxt's `login()`, `register()` and passkey `login()` resolve to the proxy's acknowledgement, `{ ok: true, expires_in? }` — the token pair stays in the sealed session. Their types are `LoginResult | BffSignInResult` (`RegisterResult | BffSignInResult`), so narrow with `'access_token' in result` or `isTwoFactorChallenge()` before reading a token. lukk-core's own methods always resolve to what lukk sent. In BFF mode `useNuxtApp().$lukk` is typed `LukkBffClient` (lukk-nuxt's), not `LukkClient`: its `login`, `loginWithPasskey`, `register`, `twoFactorChallenge` and `refreshTokens` resolve the proxy's acknowledgement, and `confirmPassword` / `confirmPasskey` resolve `{ ok: true }` without the token, which the proxy holds.
 
 ## Other Exports
 
@@ -150,7 +150,8 @@ Besides the client and the types above, `lukk-core` exports the helpers its bind
 
 | Export | What it does |
 |---|---|
-| `isTwoFactorChallenge(r)`, `isRegistrationPending(r)` | Narrow a `LoginResult` / `RegisterResult`. |
+| `isTwoFactorChallenge(r)`, `isRegistrationPending(r)` | Narrow a sign-in or registration result. Both take `unknown`, so they also narrow lukk-nuxt's composable results (`isTwoFactorChallenge(await login(...))`, where the type includes `BffSignInResult`). |
+| `SESSION_CHANGED` | The `reason` of a `401` that was not retried because the renewal belonged to another account — see [Errors](#errors). |
 | `isTokenPair(value)` | The shape gate every token sink uses: an object with a string `access_token`. |
 | `singleFlight(fn)` | Collapse concurrent calls into one in-flight promise (how the client shares a refresh). |
 | `isSameOrigin(base, path)`, `carriesOrigin(path)` | The credential guard: whether a target stays on `base`'s origin, and whether a string carries an origin of its own (a scheme or `//host`), after canonicalising it the way the URL parser does. |
@@ -178,6 +179,8 @@ interface LukkError {
 ```
 
 `reason` (lukk-core 0.12.0) is passed through when lukk's body carries a string one. Branch on it, never on `message`: a `423` with `reason: "confirmation_session_mismatch"` means the held step-up belongs to another session — discard it and confirm again — while a `423` without one means *earn a confirmation*.
+
+One `reason` comes from the client itself. On a `401` the client renews once and retries — but only for a target on `baseURL`'s origin, where its credentials went; a `401` from another origin rejects as it came, without a renewal. When the renewal hands back a token for a **different account** than the one the request was sent as (another tab signed in, and the refresh cookie is shared), the request is not sent again: it rejects with `status: 401` and `reason: SESSION_CHANGED` (`'session_changed'`, exported). The new session is kept; whether to repeat the action as that account is the caller's decision. (lukk-nuxt's `useLukkAuth` does not read it as a sign-out when it comes back from loading the user: it loads once more as the account the session now holds, and if that fails too, treats it as a load that couldn't tell rather than signing the tab out.) The accounts are compared by the JWT's `sub`, decoded but not verified, and only when both tokens name one.
 
 `retryAfter` (lukk-core 0.12.0) is the response's `Retry-After` header when it gives delay-seconds (RFC 9110 §10.2.3); the HTTP-date form is left out rather than guessed at, so the field is absent then. It is how a binding comes back when the server asked: a `429` from a throttle, or the lukk-nuxt BFF's `503` for a refresh lukk is slow to rotate, which [lukk-nuxt's client retries once](/transport-modes#a-slow-rotation) after at most ten seconds. lukk-core itself does not retry on it.
 

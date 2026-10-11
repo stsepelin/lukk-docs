@@ -77,7 +77,7 @@ Route::middleware(['auth:api', 'lukk.verified'])->group(function () {
 });
 ```
 
-An unverified user gets a **409 Conflict** (distinct from a plain authz `403`, so your client can prompt "verify your email" specifically). The check reads the user's current `hasVerifiedEmail()` each request — never a token claim — so a user who just verified is unblocked without re-logging-in.
+An unverified user gets a **409 Conflict** with the message "Your email address is not verified." (distinct from a plain authz `403`, so your client can prompt "verify your email" specifically). The check reads the user's current `hasVerifiedEmail()` each request — never a token claim — so a user who just verified is unblocked without re-logging-in.
 
 ### Blocking unverified login
 
@@ -87,7 +87,7 @@ By default an unverified user **logs in normally** and you gate the sensitive ro
 'email_verification' => ['block_unverified_login' => true],
 ```
 
-Now login returns **403** for an unverified `MustVerifyEmail` user and issues no tokens. So do the other session-minting routes: a [passkey login](/passkeys#logging-in-with-a-passkey) and the [two-factor challenge](/two-factor-authentication#logging-in-with-2fa) answer `403` for an unverified account, and [registration](/registration) answers `201` with no session. The check runs only *after* a successful credential check, so it never affects the constant-time unknown-user / wrong-password path. On the two-factor challenge it runs after the second factor verifies — only then is the account known — so a challenge that outlived the account's verified state (an email change that cleared `email_verified_at`, or the flag switched on meanwhile) spends that recovery code before the `403`.
+Now login returns **403** ("Your email address is not verified.") for an unverified `MustVerifyEmail` user and issues no tokens. So do the other session-minting routes: a [passkey login](/passkeys#logging-in-with-a-passkey) and the [two-factor challenge](/two-factor-authentication#logging-in-with-2fa) answer `403` for an unverified account, and [registration](/registration) answers `201` with no session. The check runs only *after* a successful credential check, so it never affects the constant-time unknown-user / wrong-password path. On the two-factor challenge it runs **before** the second factor is checked (lukk 0.7.0), on the account the challenge names, so a challenge that outlived the account's verified state (an email change that cleared `email_verified_at`, or the flag switched on meanwhile) is refused with the `403` without spending a single-use recovery code; it runs again after the factor verifies, for an email change that lands in between. The `403` tells a holder nothing new: the challenge already proves they passed the password, and login answers the same `403` at that point.
 
 > [!WARNING]
 > **Up to lukk 0.6, two-factor login bypassed this block.** The check ran after the two-factor challenge was issued, and the challenge route started a session without it — so an unverified user who had enrolled a second factor still got tokens. From 0.7.0 login refuses before issuing a challenge, and redemption refuses too.

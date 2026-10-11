@@ -56,7 +56,7 @@ Then enable the feature:
 
 **`release_after = 0`** is the strict §3.2.2 reading: a run broken only by a **success**. It is also the version an attacker can weaponize — lock an account and it stays locked until a human intervenes.
 
-**`release_after = 3600`** trades the strict reading for a decaying cap. 100 failures per hour is no longer "100 consecutive, ever" — but it *is* exactly **OWASP ASVS V2.2.1** ("no more than 100 failed attempts per hour on a single account"), a bar this package does not otherwise clear. **Most deployments should prefer this.** It is a 12× improvement on the throttle alone and the lock lifts itself.
+**`release_after = 3600`** trades the strict reading for a decaying cap. 100 failures per hour is no longer "100 consecutive, ever" — but it *is* exactly **OWASP ASVS 4.0.3 V2.2.1** ("no more than 100 failed attempts per hour on a single account"), a bar this package does not otherwise clear. ASVS 5.0 drops the number: 6.1.1 and 6.3.1 ask for brute-force controls defined and configured as the application documents them — this setting, with the throttles, is that control. **Most deployments should prefer this.** It is a 12× improvement on the throttle alone and the lock lifts itself.
 
 ```dotenv
 LUKK_LOCKOUT_MAX_ATTEMPTS=100
@@ -98,7 +98,9 @@ A locked-out user submitting a **recovery code** is not gated by a `two_factor` 
 
 The counter is incremented **before** the credential is verified, then compared against the cap. Reading "is it locked?" and counting afterwards is check-then-act: a burst of concurrent requests all pass the check together and all reach the password comparison, so the real number of verifications is `max_attempts` *plus* however many arrived at once. Reserving first makes the count authoritative at the moment it is taken.
 
-A successful authentication releases the reservation, so the counter still means "consecutive failures" from the outside — a correct password never costs an attempt. One exception: a correct password over 72 bytes against a bcrypt hash, which bcrypt could only verify in part, is answered with the [must-reset](/security#password-policy) `422` and keeps its attempt, since it was never fully checked.
+A successful authentication releases the reservation, so the counter still means "consecutive failures" from the outside — a correct password never costs an attempt.
+
+Counting and locking are separate steps (lukk 0.7.0). The reservation refuses an attempt whose count is past the cap, but the **lock** — and [`AccountLocked`](#events) — lands only once the credential check has failed. Up to then the attempt that reached the cap locked the account at its reservation, and when its password was right, its own success released the lock again: an app notifying on the events told the owner someone was breaking in, about their own sign-in. Now a correct password on that attempt signs in and fires neither. A count past the cap on a row that isn't locked — the attempt that reached it crashed before its verdict — is locked by the next attempt, so `release_after` can still time it. One exception: a correct password over 72 bytes against a bcrypt hash, which bcrypt could only verify in part, is answered with the [must-reset](/security#password-policy) `422` and keeps its attempt, since it was never fully checked.
 
 ## What a locked account sees
 
@@ -115,7 +117,15 @@ A successful authentication releases the reservation, so the counter still means
 
 `429` means "retry later", and with `release_after` at `0` that would be a lie — the lock needs intervention, not patience. When `release_after` is set, the message instead names the remaining wait, using Laravel's own `auth.throttle` translation line.
 
-Both messages are `__()`-wrapped, so publish `lang/en/auth.php` and add your own keys to change them.
+Both messages are `__()`-wrapped, but they are keyed differently. The hold message is a JSON-string key — the English sentence itself — so translate or reword it in `lang/{locale}.json`:
+
+```json
+{
+  "This account is locked. Contact support to restore access.": "…"
+}
+```
+
+The timed message is Laravel's `auth.throttle` line; change it in `lang/{locale}/auth.php` (publish the framework's language files with `php artisan lang:publish`).
 
 The lockout check runs **before** the in-action limiter (the per-identifier login buckets), so a locked account gets the `423` rather than a `429` that misdescribes its situation. The route throttles run earlier still, as middleware — `lukk-login`'s per-IP cap, `lukk-confirm`, `lukk-2fa` — so a caller who has exhausted one of those gets its `429` first.
 
@@ -146,7 +156,7 @@ Spent counters accumulate. `lukk:prune` — already [scheduled daily](/deploymen
 php artisan lukk:prune --lockout-days=30
 ```
 
-A **held** lock is never pruned, whatever its age — pruning must not quietly become a release path. What goes is the spent stuff: counters untouched for `--lockout-days`, and locks already past `release_after`. The sweep runs wherever the `lukk_lockouts` table exists, whether or not `features.lockout` is on now, so counters left from a time it was on still age out.
+A **held** lock is never pruned, whatever its age — pruning must not quietly become a release path. What goes is the spent stuff: counters untouched for `--lockout-days` (floored at `1`, so `0` or a non-number means one day), and locks already past `release_after`. The sweep runs wherever the `lukk_lockouts` table exists, whether or not `features.lockout` is on now, so counters left from a time it was on still age out.
 
 ## Events {#events}
 
@@ -154,7 +164,7 @@ Both are dispatched on the **transition**, not on every attempt:
 
 | Event | When |
 |---|---|
-| `Lukk\Events\AccountLocked` | A consecutive-failure run just hit the cap. |
+| `Lukk\Events\AccountLocked` | A failed attempt just brought a consecutive-failure run to the cap — once per lock, from whichever request set it (lukk 0.7.0: not for an attempt that reached the cap with the right credential). |
 | `Lukk\Events\AccountReleased` | A **held** lock was lifted — by a successful authentication, a password reset or change, or `lukk:release`. Not for clearing a counter that never reached the cap, and not for a lock already past `release_after`, whose expiry announces nothing (see [above](#releasing-a-lock)). |
 
 Up to lukk 0.6 `AccountReleased` fired whenever a counter row was deleted, so every successful sign-in after a single typo told an audit log that a locked account had been unlocked. A rebound [`LockoutRepository`](#swapping-the-store) should follow the same rule: fire for a held lock only. `AccountLocked` can fire twice for one login failure — once for the identifier's fold, once for the account — when both reach the cap; only the `id:` subject names a user.
@@ -179,6 +189,13 @@ Event::listen(function (AccountLocked $event) {
 ## Swapping the store
 
 Storage sits behind `Lukk\Contracts\LockoutRepository`, like every other seam in the package. The default `DatabaseLockoutRepository` uses a transaction with a row lock to count, so concurrent failed attempts can't race past the cap. If you rebind it, **preserve that** — a non-atomic implementation lets a burst of parallel requests blow straight through `max_attempts`. Account [erasure and export](/account-deletion) call `forget()` and `summariesForSubjects()` on whatever is bound (lukk 0.7.0; they used to be skipped unless a `lukk_lockouts` table existed), so answer `0` and `[]` for nothing stored rather than throwing.
+
+The split between counting and locking is the optional `Lukk\Contracts\ReservesLockoutAttempts` (lukk 0.7.0), which extends `LockoutRepository` and which `DatabaseLockoutRepository` implements:
+
+- `reserve($purpose, $subject, $guard): int` counts one attempt and returns the new count **without** locking at the cap. Lock (and fire `AccountLocked`) only for a count past the cap on a row that isn't locked — the lost-verdict case above.
+- `lockIfSpent($purpose, $subject, $guard): void` is called when the credential check failed: lock if the run has reached the cap and isn't locked yet, and fire `AccountLocked` exactly once per lock, from whichever caller actually set it. The default does it in one conditional `UPDATE`, so of two failures landing together only one announces.
+
+A repository that implements only `LockoutRepository` keeps working unchanged: the actions reserve through `recordFailure()`, which counts and locks at once, so it keeps the old behaviour — including the lock-then-release on a correct password at the cap.
 
 ```php
 // AppServiceProvider::register()

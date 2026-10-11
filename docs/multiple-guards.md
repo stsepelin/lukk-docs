@@ -23,6 +23,8 @@ A guard is declared in two places, joined by its name — the standard Laravel p
 ],
 ```
 
+The **default** guard is the exception to "lukk reuses the `provider`": sign-in checks its passwords against [`lukk.user_provider`](/configuration#guard-provider), while the guard resolves each token's `sub` through `auth.guards.<default>.provider` (or, naming none, `auth.defaults.provider`). The two must name the same provider — pointed at different ones, a `users` password would mint a token for the `admins` row with the same id — so from lukk 0.7.0 the application refuses to boot until they agree, naming both settings. The default configuration (`users` on both sides) is unaffected.
+
 **2. `config/lukk.php` → `guards`** — the guard's token identity + route mount:
 
 ```php
@@ -85,10 +87,18 @@ class Admin extends Authenticatable
 The `refresh_tokens` table already carries the nullable `guard` column that scopes families per guard (it ships in lukk's core migration and stays null under a single guard) — no extra migration to run.
 
 > [!NOTE]
-> **Enabling multi-guard on an existing single-guard app?** Its existing rows have `guard = NULL`, but once you configure guards the default guard scopes by its name — so backfill first, or current sessions log out once:
+> **Enabling multi-guard on an existing single-guard app?** Its existing rows have `guard = NULL`, but once you configure guards every guard — the default one included — stamps its name on what it writes and reads only its own rows. So backfill first: unbackfilled sessions log out once, and unbackfilled [passkeys](/passkeys) go dark — they can't be asserted, listed, erased or pruned until they carry a guard name:
 > ```sql
 > UPDATE refresh_tokens SET guard = 'api' WHERE guard IS NULL;  -- 'api' = your config('lukk.guard')
+> UPDATE passkeys       SET guard = 'api' WHERE guard IS NULL;
 > ```
+>
+> **Removing a guard needs the opposite cleanup, and it fails open.** Once `lukk.guards` is empty again no scope is applied at all, so rows still stamped with the departed guard become visible to the default guard — for passkeys that lookup is the sign-in decision, so the removed guard's authenticator would log in as whichever account holds the same id in the default provider. Delete or re-home those rows **before** dropping the guard:
+> ```sql
+> DELETE FROM passkeys       WHERE guard = 'admin';
+> DELETE FROM refresh_tokens WHERE guard = 'admin';
+> ```
+> The full text is in [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md#upgrading-to-060-from-05x).
 
 ## What you get
 
@@ -103,6 +113,8 @@ POST   admin/auth/two-factor-challenge               (only while that guard enfo
 ```
 
 `DELETE admin/auth/sessions` follows the guard's own `features.logout_all`. `two-factor-challenge` is mounted on the same rule login challenges on, so an enrolled account is never challenged without somewhere to answer; the two-factor *management* routes, passkeys, registration and the other features stay on the default guard.
+
+Some settings have no per-guard reading at all, because the feature they configure runs on the default guard: `registration.login`, every `password_reset.*` key, and `email_verification.frontend_url` and `email_verification.expire`. A value for them under `lukk.guards.{name}` is ignored. The email verification link, likewise, looks its user up through the **default** guard's user provider.
 
 Protect admin routes with `auth:admin`; they resolve against the `admins` table with the admin token identity.
 

@@ -25,7 +25,7 @@ Grouped by theme; likely order: impersonation → personal access tokens.
 - **[Registration](/registration)** — `POST /auth/register` mirroring login, fully customizable, with an auto-login toggle.
 - **Configurable login identifier** — `lukk.username` (default `email`); login by any unique column.
 - **[Account lockout](/account-lockout)** *(opt-in)* — a persistent cap on **consecutive** failed attempts (NIST SP 800-63B-4 §3.2.2), covering password login, the two-factor challenge and step-up confirmation; `423`, an operator release command, and lock/release events. Off by default: a hard lockout is a denial-of-service primitive.
-- **Throttle identity** — every limit keys on `Lukk::rateLimitKey()`, with IPv6 collapsed to a configurable prefix (default `/64`) and `Lukk::rateLimitKeyUsing()` to replace the identity wholesale.
+- **Throttle identity** — every per-address limit keys on `Lukk::rateLimitKey()`, with IPv6 collapsed to a configurable prefix (default `/64`) and `Lukk::rateLimitKeyUsing()` to replace the identity wholesale.
 - **[Change password](/change-password)** — an authenticated `POST /auth/password` that re-verifies the current password, revokes every other session, and fires `PasswordChanged`.
 - **[Two-factor (TOTP)](/two-factor-authentication)** — enrol, confirm, challenge at login, single-use recovery codes (+ remaining count), disable.
 - **[Passkeys (WebAuthn)](/passkeys)** — register, passwordless login, list, remove.

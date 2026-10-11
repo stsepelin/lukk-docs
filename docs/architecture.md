@@ -37,7 +37,7 @@ If you've used `Sanctum::usePersonalAccessTokenModel()`, you already know how to
 
 ### Where the concrete code lives
 
-The default implementations bound to each contract live under `Tokens/`, `Refresh/`, `TwoFactor/`, `Passkeys/`, `Support/`, and `Http/Responses/`. The signing/verification material is resolved by `Tokens\Jwt\KeyRing`, with the algorithm pinned from config (never read from the token header). Responses implement Laravel's `Responsable` contract so you can reshape the output.
+The default implementations bound to each contract live under `Tokens/`, `Refresh/`, `Lockout/`, `TwoFactor/`, `Passkeys/`, `Support/`, and `Http/Responses/`. The signing/verification material is resolved by `Tokens\Jwt\KeyRing`, with the algorithm pinned from config (never read from the token header). Responses implement Laravel's `Responsable` contract so you can reshape the output.
 
 ## Client (Nuxt)
 

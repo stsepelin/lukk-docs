@@ -162,6 +162,7 @@ $pair = app(StartSession::class)($user->getKey(), [], ['ci.deploy', Abilities::S
 |---|---|---|
 | No credential reached the gate | `401` | so a client learns it needs to log in, rather than giving up |
 | Authenticated, insufficient scope | `403` | with `WWW-Authenticate: Bearer error="insufficient_scope", error_description="…", scope="…"` ([RFC 6750 §3.1](https://datatracker.ietf.org/doc/html/rfc6750#section-3.1)) |
+| A pinned token on [lukk's own routes](#lukk-s-own-routes) | `403` | body message "This token was issued with a fixed set of abilities, and none of them is lukk.account." (naming the route's ability), with `error_description="This token may not perform account-security operations."` and `scope` set to the required ability |
 
 A refusal dispatches `Lukk\Events\TokenAbilityDenied`, carrying the subject, guard, family and the **route's** requirement — never the caller's granted list. A token probing for what it can still reach looks exactly like a run of these, and it is the only lukk-side signal that one is. Deliberately an event rather than a log line: ability names travel widely enough already.
 

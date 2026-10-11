@@ -83,7 +83,7 @@ From lukk 0.7.0 it also fires for a non-zero counter that **did not advance** be
 
 ### AccountLocked / AccountReleased
 
-When the opt-in [account lockout](/account-lockout) is on, `Lukk\Events\AccountLocked` fires the moment a consecutive-failure run hits the cap, and `Lukk\Events\AccountReleased` when a **held** lock is lifted — by a successful authentication, a password reset or change, or `lukk:release`. From lukk 0.7.0 clearing a counter that never reached the cap (every successful sign-in after a typo did this) or a lock already past `release_after` fires nothing; a rebound `LockoutRepository` should follow the same rule. Both carry `$purpose` (`login`, `two_factor` or `confirm`), `$subject`, and `$guard`:
+When the opt-in [account lockout](/account-lockout) is on, `Lukk\Events\AccountLocked` fires the moment a failed attempt brings a consecutive-failure run to the cap — once per lock, and from lukk 0.7.0 not for an attempt that reached the cap with the right credential ([why](/account-lockout#the-attempt-is-consumed-before-the-password-is-checked)) — and `Lukk\Events\AccountReleased` when a **held** lock is lifted — by a successful authentication, a password reset or change, or `lukk:release`. From lukk 0.7.0 clearing a counter that never reached the cap (every successful sign-in after a typo did this) or a lock already past `release_after` fires nothing; a rebound `LockoutRepository` should follow the same rule. Both carry `$purpose` (`login`, `two_factor` or `confirm`), `$subject`, and `$guard`:
 
 ```php
 use Illuminate\Support\Facades\Event;
@@ -106,7 +106,9 @@ Locks written before lukk 0.7.0 for an identifier naming no account carry the ol
 
 ### TokenAbilityDenied
 
-**lukk 0.6.0.** `Lukk\Events\TokenAbilityDenied` fires when a verified token is refused a route because its [`scope`](/abilities) doesn't cover it. A stolen token probing for what it can reach looks like a run of these. It carries `$userId`, `$guard`, `$familyId`, `$required` (what the **route** asked for — never what the caller holds) and `$requiresAll` (`true` for `lukk.abilities`, `false` for `lukk.ability`). An event rather than a log line, so ability names reach your logs only if you put them there.
+**lukk 0.6.0.** `Lukk\Events\TokenAbilityDenied` fires when a verified token is refused a route because its [`scope`](/abilities) doesn't cover it. A stolen token probing for what it can reach looks like a run of these. It carries `$userId`, `$guard`, `$familyId`, `$required` (what the **route** asked for — never what the caller holds) and `$requiresAll` (`true` for `lukk.abilities`, `false` for `lukk.ability`).
+
+It also fires when [lukk's own routes](/abilities#lukk-s-own-routes) refuse a pinned token: `$required` is then `['lukk.sessions']`, `['lukk.account']` or `['lukk.account.delete']`, and `$requiresAll` is `false`. An event rather than a log line, so ability names reach your logs only if you put them there.
 
 ### AccountDeleting / AccountDeleted
 
@@ -165,6 +167,20 @@ Event::listen([
 ], function (object $event) {
     // A queued notification: "a sign-in method on your account changed — if this wasn't you, …"
     $event->user->notify(new SignInMethodChanged($event::class));
+});
+```
+
+### RecoveryCodeUsed
+
+**lukk 0.7.0.** `Lukk\Events\RecoveryCodeUsed` fires once a [recovery code](/two-factor-authentication#recovery-codes) is spent at `POST /auth/two-factor-challenge`. NIST SP 800-63B-4 §4.2 asks that the subscriber be told when their account is recovered, and a recovery code is that — for the owner who lost their authenticator, or for whoever found the printed list. It carries `$user` and `$remaining`, the number of unused codes left; at `0` the next lost authenticator has no way back, so prompt a new set. It fires as soon as the code is spent, whether or not the sign-in then completes, since the code is gone either way. Like the authenticator events it uses `SerializesModels`, so a queued listener gets the user as an identifier, re-read when the job runs.
+
+```php
+use Illuminate\Support\Facades\Event;
+use Lukk\Events\RecoveryCodeUsed;
+
+Event::listen(function (RecoveryCodeUsed $event) {
+    // "A recovery code was used to sign in to your account — N left. If this wasn't you, …"
+    $event->user->notify(new RecoveryCodeWasUsed($event->remaining));
 });
 ```
 

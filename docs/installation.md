@@ -65,7 +65,7 @@ Route::middleware('auth:api')->get('/me', fn (Request $request) => $request->use
 ```
 
 > [!IMPORTANT]
-> lukk's own `/auth/*` routes always render JSON `401`/`422`. **Your own `auth:api` routes are not covered automatically:** an unauthenticated request without `Accept: application/json` takes Laravel's guest redirect and — with no `login` route — 500s inside the middleware. Attach lukk's `lukk.force-json` middleware to fix it surgically:
+> lukk's own `/auth/*` routes always render JSON `401`/`422` — except `GET /auth/email/verify/{id}/{hash}`, which sits outside that group because a browser opens it from the mail: its errors (an invalid signature, a throttle) follow the request's `Accept` header like any Laravel route. **Your own `auth:api` routes are not covered automatically:** an unauthenticated request without `Accept: application/json` takes Laravel's guest redirect and — with no `login` route — 500s inside the middleware. Attach lukk's `lukk.force-json` middleware to fix it surgically:
 >
 > ```php
 > Route::middleware(['lukk.force-json', 'auth:api'])->get('/me', fn (Request $r) => $r->user());

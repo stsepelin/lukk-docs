@@ -94,6 +94,8 @@ form.hasErrors      // true
 
 > [!NOTE]
 > **Nested & array fields.** Laravel flattens the bag into **dot notation** — nested objects as `authorization.role`, array items as `users.0.email`. `form.errors` keys them exactly as returned, so read them with bracket access: `form.errors['authorization.role']`. For a nested `form.data`, use **`form.nestedErrors`** — the same errors expanded into a nested object: bind `form.nestedErrors.authorization?.role`, and array fields nest under their index, `form.nestedErrors.users?.[0]?.email`.
+>
+> Both are typed (lukk-nuxt 0.12.0). `form.errors` takes a field of `data` or any dotted path (`` `${string}.${string}` ``), so `form.errors['authorization.role']` type-checks, and `setError` / `clearErrors` accept the same keys. `form.nestedErrors` follows the shape of `data`: an object field nests, an array field is indexed, and a leaf — a scalar, a `Date`, a `File`/`Blob` — is a `string`. A nested field's own message (Laravel can report `items` as well as `items.0.name`) is in `form.errors.items`, not in `nestedErrors`. Earlier releases typed `errors` with the top-level fields only and `nestedErrors` as `Record<string, unknown>`, so both of the reads above failed to type-check.
 
 You can also drive errors yourself (e.g. from a client-side check). All of these are **chainable** (they return the form):
 
@@ -251,7 +253,7 @@ Force multipart even without a file with `forceFormData: true`. For a `<input ty
 const form = useLukkForm({ q: '' })
 
 async function search() {
-  form.cancel()                 // drop any previous in-flight search
+  form.cancel()                 // optional: a new submit aborts the previous one anyway
   try {
     results.value = await form.get('/search')
   }
@@ -262,6 +264,8 @@ async function search() {
 ```
 
 If you pass your own `signal` in the submit options, that wins and `cancel()` is a no-op for that submit; aborting your signal (without a reason of your own) rejects with the `AbortError` the same way.
+
+**A new submit supersedes the one in flight** (lukk-nuxt 0.12.0), as Inertia's does: the earlier submit is aborted and rejects with the `AbortError`. One that settles anyway — it ran under a `signal` of your own, which a new submit can't abort — still resolves or rejects its own promise and runs its own hooks, but leaves `processing`, `errors`, `wasSuccessful` / `recentlySuccessful` and the defaults to the newer submit. Before, a late `422` from the first submit overwrote the second's success, and `processing` went `false` while the second was still out.
 
 ## Notes & Caveats
 

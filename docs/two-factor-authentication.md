@@ -65,6 +65,8 @@ Switching the feature off takes a value somebody set: `false`, `0` or `'0'`. If 
 > [!NOTE]
 > The management routes that change something — enable, confirm, regenerate, disable — are gated by [step-up confirmation](/confirmation): the user must have recently re-confirmed their identity, because changing someone's 2FA settings should require fresh proof. Reading the recovery-code count is not; it needs only authentication (and, for a [pinned](/abilities#derived-vs-pinned-grants) token, `lukk.account`). The challenge is public.
 
+**Which guard mounts what.** The management routes (and the recovery-code count) are mounted on the default guard only. Every [extra guard](/multiple-guards#what-you-get) mounts just `two-factor-challenge`, under its own path, and only while that guard enforces two-factor — the same rule its login challenges on.
+
 `total` is the size of the set lukk actually issues: `two_factor.recovery_codes` (default `8`), clamped to 1–100 (lukk 0.7.0 — it used to report the raw setting). How long a challenge token lives is `two_factor.challenge_ttl` (default `300` seconds), read per guard. A pending secret the key can no longer decrypt (an `APP_KEY` rotated without `previous_keys`, a corrupt row) makes `confirm` a `422` on `code`, not a `500` (lukk 0.7.0) — enrol again.
 
 ### Enrolling a user
@@ -82,7 +84,9 @@ Switching the feature off takes a value somebody set: `false`, `0` or `'0'`. If 
 
 ### Logging in with 2FA
 
-When a 2FA-enabled user logs in, `/auth/login` returns a challenge rather than tokens:
+When a 2FA-enabled user logs in, `/auth/login` returns a challenge rather than tokens. With [`block_unverified_login`](/email-verification#blocking-unverified-login) on, an account whose email is unverified is refused with `403` ("Your email address is not verified.") **before** a challenge is issued — after the password check, so it reveals nothing a challenge wouldn't, and the user is never asked for a code on a sign-in that would be refused. A challenge that outlives the account's verified state (an email change, or the flag switched on meanwhile) is refused the same way at redemption, before the code is checked, so no recovery code is spent on it (lukk 0.7.0).
+
+The challenge:
 
 ```json
 { "two_factor": true, "challenge_token": "..." }
@@ -129,9 +133,11 @@ Recovery codes let a user authenticate if they lose their device. Each code work
 
 A recovery code is matched before the user's row is locked, and only spending it takes the lock, so a wrong guess no longer stalls every other write to the account while each stored code is hashed (lukk 0.7.0). Concurrent redemptions still spend a code once — the lock is taken in a transaction on the user model's own connection, so a user table on a separate directory database is covered too (lukk 0.7.0; earlier releases opened the transaction on the default connection, where the lock was released at once and two redemptions of one code could both succeed). A recovery code stored under a hasher the app has since left — bcrypt codes after a move to argon2id with `hashing.argon.verify` on — makes the hasher throw; lukk treats it as no match rather than a `500` (lukk 0.7.0), as sign-in treats such a password. Those codes can't be redeemed until the user regenerates the set under the new hasher, so plan a regeneration prompt when you switch.
 
+Every spent code dispatches [`RecoveryCodeUsed`](/events#recoverycodeused) with the number left (lukk 0.7.0): a recovery is something the owner should hear about through another channel, and at zero they need a new set.
+
 ### Events
 
-Confirming a TOTP dispatches `TwoFactorAuthenticationConfirmed`, removing one (confirmed or pending) dispatches `TwoFactorAuthenticationDisabled`, and regenerating the codes dispatches `RecoveryCodesGenerated` (lukk 0.7.0). lukk sends no mail; listen and tell the user through another channel. See [Events → Authenticator events](/events#authenticator-events).
+Confirming a TOTP dispatches `TwoFactorAuthenticationConfirmed`, removing one (confirmed or pending) dispatches `TwoFactorAuthenticationDisabled`, regenerating the codes dispatches `RecoveryCodesGenerated`, and spending one at sign-in dispatches [`RecoveryCodeUsed`](/events#recoverycodeused) (lukk 0.7.0). lukk sends no mail; listen and tell the user through another channel. See [Events → Authenticator events](/events#authenticator-events).
 
 ### Security notes
 
@@ -140,7 +146,7 @@ Confirming a TOTP dispatches `TwoFactorAuthenticationConfirmed`, removing one (c
 - The verification window is ±1 step (`two_factor.window`, clamped to 0–10) and should not be widened (see [Configuration](/configuration#two-factor)).
 - A stored secret the TOTP library can't read (not base32, too short — a restored backup or a hand-edited row) fails the code and is reported, rather than answering `500` on every sign-in.
 - **Re-enrolling over confirmed 2FA is refused** with `409`. Overwriting the secret would null `two_factor_confirmed_at` and silently switch 2FA *off*, so a user who reopened the QR screen and abandoned it would be left unprotected with nothing to notify them. Call `DELETE /auth/two-factor` first — disabling should be deliberate.
-- Challenge codes are throttled per account. With the opt-in [account lockout](/account-lockout) enabled, a run of failed codes also locks the second factor (`423`) — but a **recovery code is never gated by that lock**, so an attacker can't strand a user by burning their TOTP budget.
+- Challenge codes are throttled per account (`rate_limits.two_factor`). Each attempt is counted **before** its code is checked and refused on the new count with a `429` on `code` (lukk 0.7.0), so concurrent guesses can't all read "under budget" first; a success clears the count. With the opt-in [account lockout](/account-lockout) enabled, a run of failed codes also locks the second factor (`423`) — but a **recovery code is never gated by that lock**, so an attacker can't strand a user by burning their TOTP budget.
 
 > [!WARNING]
 > TOTP is **not phishing-resistant**. A real-time attacker-in-the-middle (such as Evilginx) can relay a code and steal the session. For phishing-resistant authentication, use [passkeys](/passkeys).
@@ -190,7 +196,7 @@ async function onVerify() {
 </template>
 ```
 
-The pending challenge is held for you; `verifyTwoFactor` completes it, persists the tokens, and loads the user.
+The pending challenge is held for you; `verifyTwoFactor` completes it, persists the tokens, and loads the user. A wrong code rejects with a `422` on `code` and keeps the challenge, so the user can try again. A challenge lukk refuses outright — expired, already spent, or issued before the password changed: a `422` on `challenge_token` — can never succeed, so it is dropped and `pendingTwoFactor` turns `false` (lukk-nuxt 0.12.0); show the sign-in form again rather than letting each further code spend the throttle.
 
 ### Recovery codes at login
 

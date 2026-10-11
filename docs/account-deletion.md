@@ -171,16 +171,19 @@ Everything lukk owns is still erased — only the row's fate changes.
 {
   "generated_at": "2026-03-04T05:06:07+00:00",
   "account": { "id": 1, "identifier": "subject@example.com" },
-  "sessions": [{ "session": "…", "created_at": "…", "last_rotated_at": "…", "revoked_at": null, "expires_at": "…" }],
+  "sessions": [{ "session": "…", "created_at": "…", "last_rotated_at": "…", "revoked_at": null, "expires_at": "…", "amr": ["pwd", "otp", "mfa"], "authenticated_at": "2026-08-22T09:00:00+00:00" }],
   "passkeys": [{ "credential_id": "…", "name": "Yubikey at HQ", "created_at": "2026-08-01T10:00:00+00:00", "last_used_at": "2026-08-22T09:12:58+00:00", "aaguid": "…", "transports": ["usb", "nfc"] }],
-  "two_factor": { "enabled": true, "confirmed_at": "…" },
-  "lockouts": [{ "purpose": "login", "attempts": 3, "locked_at": null, "first_failed_at": "2026-08-22T09:30:00+00:00", "last_failed_at": "2026-08-22T09:46:18+00:00" }]
+  "two_factor": { "enabled": true, "confirmed_at": "…", "pending": false, "recovery_codes_remaining": 7 },
+  "lockouts": [{ "purpose": "login", "attempts": 3, "locked_at": null, "first_failed_at": "2026-08-22T09:30:00+00:00", "last_failed_at": "2026-08-22T09:46:18+00:00" }],
+  "password_reset": { "requested_at": "2026-08-22T09:50:00+00:00" }
 }
 ```
 
 `sessions` holds one entry per refresh-token row, not per session: every rotation writes a row, so a
 session that refreshed ten times appears ten times under the same `session` (its family id), each with
-its own times.
+its own times. From lukk 0.7.0 each entry also says how and when that session was signed in: `amr` (the
+[RFC 8176 methods](/tokens-and-rotation#the-amr-claim)) and `authenticated_at` (its
+[`auth_time`](/tokens-and-rotation#the-auth-time-claim), ISO-8601) — `null` where the row doesn't record them.
 
 Every time in the export is an ISO-8601 string. From lukk 0.7.0 each passkey also carries
 `created_at`, `aaguid` (the authenticator model) and `transports` — everything erasure destroys that
@@ -190,6 +193,17 @@ mapped through an allowlist, so a [`PasskeyRepository`](/customization#available
 more cannot publish it; a store that doesn't supply the three new fields reports them as `null`.
 
 `lockouts` arrives with lukk 0.7.0: the [account-lockout](/account-lockout) counters held against the account, which erasure also deletes. It reports the purpose, the attempt count and ISO-8601 timestamps (`locked_at` is `null` while the counter is not locked) — never lukk's internal subject keys. A custom `LockoutRepository` must implement `summariesForSubjects()` to supply it — and, from lukk 0.7.0, it is called (with `forget()` on erasure) whether or not a `lukk_lockouts` table exists, so a store kept elsewhere no longer leaves a deleted account's counters behind or out of the export.
+
+lukk 0.7.0 also discloses the other facts erasure deletes, since GDPR Art. 15 must disclose what Art. 17
+destroys:
+
+- `two_factor.pending` — a TOTP secret was enrolled and never confirmed.
+- `two_factor.recovery_codes_remaining` — how many unused recovery codes are left (`null` for a user model
+  without `recoveryCodesRemaining()`). Never a code or its hash.
+- `password_reset` — `{ "requested_at": … }` for a pending reset row on the configured broker's table and
+  connection (`lukk.password_reset.broker`), or `null`. The row holds the address in plain text until the
+  broker prunes it; the token is never included. `ExportAccount` takes the broker name as a new trailing
+  optional constructor argument.
 
 > [!WARNING]
 > **This is the auth slice, not a complete Art. 15 response.** lukk knows about sessions, passkeys,

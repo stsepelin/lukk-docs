@@ -81,7 +81,9 @@ Lukk::tokenClaimsUsing(fn ($userId) => [
 ```
 
 > [!NOTE]
-> Your claims are merged in, but the standard claims (`sub`, `exp`, `iss`, `aud`, `jti`, `fid`, …) always win and cannot be overridden. So do the reserved claims `scope`, `pin` and (from lukk 0.7.0) `amr` and `auth_time`: a hook can neither forge an [authentication method](/tokens-and-rotation#the-amr-claim) the session never used nor erase the real one.
+> Your claims are merged in, but the standard claims (`sub`, `exp`, `iss`, `aud`, `jti`, `fid`, …) always win and cannot be overridden. So do the reserved claims `pin` and (from lukk 0.7.0) `amr` and `auth_time`: a hook can neither forge an [authentication method](/tokens-and-rotation#the-amr-claim) the session never used nor erase the real one.
+>
+> `scope` is reserved only once [abilities](/abilities) are in use — an `abilitiesUsing` callback is registered, or `features.abilities` is on for the guard. Before that, a `scope` your hook returns is signed as is, and `lukk.ability` / `lukk.abilities` honour it. Don't emit one: use `abilitiesUsing` instead, and the claims hook stays out of authorization.
 
 ## Swapping the refresh token model
 
@@ -95,6 +97,8 @@ Lukk::useRefreshTokenModel(RefreshToken::class);
 ```
 
 The model may live on its own connection (`protected $connection`). Rotation and bulk revocation open their transaction on that connection (lukk 0.7.0) — earlier releases opened it on the default one, so the row lock was taken in autocommit and released at once, and rotation and reuse detection were not atomic.
+
+**Model events don't fire for lukk's writes** (lukk 0.7.0). The default repository stores each refresh token with `saveQuietly()`: the write runs inside the rotation's transaction, under the parent row's lock, where no application code may run. An observer on your model used to run there — serialising the family's refreshes behind it and, on PostgreSQL, turning a swallowed failing query into a `COMMIT` that silently rolled back — and a `creating` listener returning `false` cancelled the write, so rotation handed back a refresh token that was never stored. So `creating`, `created`, `saving` and `saved` no longer fire for the rows lukk persists, and if the save still reports that nothing was written, `persist()` throws a `RuntimeException` rather than return a token it never stored. Audit sessions from lukk's [events](/events) instead (`RefreshTokenReused`, `SessionUnclaimed`, and your own login and logout listeners).
 
 > [!NOTE]
 > **`$timestamps = false` is safe here.** [`claim_seconds`](/configuration#refresh-behavior) recognises a session's original refresh token by its lineage — the row persisted with no predecessor — not by `created_at`, and the window itself is measured from the marker lukk wrote at sign-in. Timestamps are still worth keeping for the data-subject export, which reports when each session began.
@@ -115,7 +119,7 @@ Four fields on `RefreshTokenRecord` carry policy that the repository is the only
 - **`original`** — whether this row is the family's first, the one you were handed with a `null` `$previousId`. It is how [`claim_seconds`](/configuration#refresh-behavior) recognises the refresh token the sign-in itself issued, and it is the field to return. It is a tri-state: leave it `null` ("I can't say") and lukk falls back to `createdAt`. Never answer `true` for a row you are unsure about — a successor reported as the original is a session in active use being logged out.
 - **`createdAt`** — the row's creation time, and the fallback for `claim_seconds` when `original` is unknown. It only compares mint times, so a successor minted within a couple of seconds of the sign-in reads as the original; that tolerance is a fixed constant, deliberately not `leeway` (both timestamps come from the same server in one sign-in, so only write skew has to be absorbed). Leave **both** fields out and the revocation is disabled entirely (lukk logs one warning per worker process and carries on).
 - **`scope`** — the family's pinned [ability](/abilities) grant. `null` and `''` are different answers: `null` means *derive the grant on every mint*, `''` means *pinned to nothing*. Round-trip the empty string. Collapsing the two lets the most restricted token in the system widen to its subject's full grant on the first refresh.
-- **`amr`** (lukk 0.7.0) — the session's [authentication methods](/tokens-and-rotation#the-amr-claim). `persist()` takes a trailing `?string $amr = null`; store the string you are given and return it here, as you do `scope`. A repository that ignores it keeps the pre-0.7 behaviour: the claim is absent after the first refresh.
+- **`amr`** (lukk 0.7.0) — the session's authentication record: its [methods](/tokens-and-rotation#the-amr-claim) and its sign-in time ([`auth_time`](/tokens-and-rotation#the-auth-time-claim)), as JSON (`{"amr":[…],"auth_time":…}`). `persist()` takes a trailing `?string $amr = null`; treat the string as **opaque** — store what you are given and return it here unchanged, as you do `scope`. A repository that ignores it keeps working, but the session has no `amr` and no `auth_time` after the first refresh, so the password step-up's multi-factor allowance never applies to it.
 
 ```php
 public function persist(
@@ -129,6 +133,7 @@ PHP raises a fatal on a mismatched signature, so an implementation (or a `Databa
 Two behaviours the signatures can't express:
 
 - **`revokeUserFamilies()` / `revokeUserFamiliesExcept()` revoke by the ids they read**, never by the user again, and return exactly those ids. Revoking "every row for this user" in a second statement also catches a session that committed between the read and the update — under PostgreSQL READ COMMITTED or InnoDB — which is then revoked in the table but never denylisted or reported, and its user is signed out on the next refresh with nothing to show why.
+- **A family id that isn't a UUID names no family.** lukk mints every family as a UUID, but a co-issuer's `fid` can be anything (`42`, `"sess_42"`). The default repository answers such an id as "no family here" — not pinned, nothing to revoke, nothing excepted — without querying, because PostgreSQL's native `uuid` column refuses the comparison with an error (lukk 0.7.0). A replacement should answer it the same way rather than throw.
 - **A revoked row is dead.** `revokeFamily()` is family-wide, so a record carrying `revokedAt` means that family's revoke has already run, and lukk does no further work when one is presented.
 
 ## Reshaping responses
@@ -177,6 +182,7 @@ The cryptographic and revocation seams are contracts too. Rebind `Contracts\Toke
 | `TwoFactorChallengeResponse` | built-in | Shapes the 2FA login challenge. |
 | `EmailVerificationResponse` | built-in | Answers a verified link: `204` for JSON, a redirect to `frontend_url` for a browser. |
 | `LockoutRepository` | `DatabaseLockoutRepository` | Stores the [account-lockout](/account-lockout) counters; also `forget()` for erasure and `summariesForSubjects()` for the export — called on whatever is bound, so answer `0` / `[]` for nothing stored. |
+| `ReservesLockoutAttempts` (optional, extends `LockoutRepository`) | implemented by `DatabaseLockoutRepository` | Counts an attempt without locking (`reserve()`) and locks only once the check failed (`lockIfSpent()`), so a correct credential on the attempt that reaches the cap doesn't lock and fire `AccountLocked` (lukk 0.7.0). Implement it on a custom lockout store to get that; without it the store keeps the old behaviour. See [Swapping the store](/account-lockout#swapping-the-store). |
 | `TwoFactorProvider` | `Google2FaTotpProvider` | Generates and verifies TOTP codes. |
 | `WebAuthnCeremony` | `SpomkyWebAuthnCeremony` | Performs WebAuthn registration/assertion, and reports what an assertion proved. |
 | `PasskeyRepository` | `DatabasePasskeyRepository` | Persists passkey credentials. |
