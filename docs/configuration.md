@@ -80,7 +80,13 @@ The `iss` and `aud` claims stamped into every token and validated on every reque
 
 **lukk 0.7.0.** How long a **failed** sign-in takes, in microseconds, whatever the reason it failed. Equal hashing work isn't equal time: an unknown identifier hashes at the configured cost, while a real account is checked at the cost stored in its hash, so a row left at a lower cost by a `BCRYPT_ROUNDS` bump answers measurably faster. lukk equalizes the work first (see [Security](/security#login-responses)), and this box hides what is left. A **successful** sign-in leaves the box at once — its status code already says it succeeded.
 
-Set it above one derivation at your configured cost plus one at the oldest cost still stored, measured on your own hardware (`php -r 'password_hash("x", PASSWORD_BCRYPT, ["cost"=>12]);'`). Too low is ineffective, not harmful: a timebox pads a fast path and never shortens a slow one. `0` switches it off. Read per guard.
+Set it above one derivation at your configured cost plus one at the oldest cost still stored, measured on your own hardware. This prints the microseconds one bcrypt derivation takes at each cost — run it with your configured cost and with the oldest cost still in your `users` table (the two digits after `$2y$` in a stored hash), add the two, and leave headroom:
+
+```sh
+php -r 'foreach ([10, 12] as $c) { $t = hrtime(true); password_hash("x", PASSWORD_BCRYPT, ["cost" => $c]); printf("cost %d: %d µs\n", $c, (hrtime(true) - $t) / 1000); }'
+```
+
+For Argon2 put your `memory_cost`/`time_cost`/`threads` into `password_hash("x", PASSWORD_ARGON2ID, [...])` the same way. Too low is ineffective, not harmful: a timebox pads a fast path and never shortens a slow one. `0` switches it off. Read per guard.
 
 The forgot-password route has its own box, [`password_reset.timebox_micros`](/password-reset#setup).
 
