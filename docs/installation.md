@@ -29,7 +29,7 @@ Access tokens are signed with a 256-bit secret. Generate one into `.env`:
 php artisan lukk:secret
 ```
 
-It behaves like `key:generate`: no flag writes `LUKK_SECRET` (prompting before overwrite), `--force` overwrites silently, `--show` prints it instead.
+It behaves like `key:generate`: no flag writes `LUKK_SECRET` (prompting before overwrite), `--force` overwrites silently, `--show` prints it instead. `--guard=admin` writes an [extra guard's](/multiple-guards) own `LUKK_ADMIN_SECRET`.
 
 > [!WARNING]
 > Treat `LUKK_SECRET` like `APP_KEY` — never commit it. Rotating it invalidates every access token signed with the old value (refresh tokens are opaque and unaffected, so clients recover on their next refresh).
@@ -65,7 +65,7 @@ Route::middleware('auth:api')->get('/me', fn (Request $request) => $request->use
 ```
 
 > [!IMPORTANT]
-> lukk's own `/auth/*` routes always render JSON `401`/`422`. **Your own `auth:api` routes are not covered automatically:** an unauthenticated request without `Accept: application/json` takes Laravel's guest redirect and — with no `login` route — 500s inside the middleware. Attach lukk's `lukk.force-json` middleware to fix it surgically:
+> lukk's own `/auth/*` routes always render JSON `401`/`422` — except `GET /auth/email/verify/{id}/{hash}`, which sits outside that group because a browser opens it from the mail: its errors (an invalid signature, a throttle) follow the request's `Accept` header like any Laravel route. **Your own `auth:api` routes are not covered automatically:** an unauthenticated request without `Accept: application/json` takes Laravel's guest redirect and — with no `login` route — 500s inside the middleware. Attach lukk's `lukk.force-json` middleware to fix it surgically:
 >
 > ```php
 > Route::middleware(['lukk.force-json', 'auth:api'])->get('/me', fn (Request $r) => $r->user());
@@ -135,7 +135,7 @@ Generate one with `openssl rand -base64 32`. It's the BFF equivalent of `APP_KEY
 
 ### What the module registers
 
-- the composables (`useLukkAuth`, `useLukkTwoFactor`, `useLukkConfirmation`, `useLukkPasskeys`, `useLukkEmailVerification`), auto-imported;
+- every composable, auto-imported: `useLukkAuth`, `useLukkFetch`, `useLukkForm`, `useLukkTwoFactor`, `useLukkConfirmation`, `useLukkPasskeys`, `useLukkEmailVerification`, `useLukkPasswordReset`, `useLukkChangePassword`, `useLukkAccount`, `useLukkAbilities`;
 - the route middleware `lukk-auth`, `lukk-guest`, `lukk-verified`, `lukk-confirmed`;
 - a client plugin that restores an existing session on load;
 - in `bff` mode, the Nitro proxy at `/api/_lukk/**`.

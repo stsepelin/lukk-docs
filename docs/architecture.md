@@ -16,20 +16,20 @@ The architecture mirrors Sanctum:
 
 | Layer | Responsibility |
 |---|---|
-| **Controllers** | Thin — run an Action, return a Response contract. |
+| **Controllers** | Thin — run an Action, return the response. |
 | **Actions** | Single-purpose orchestration; the policy lives here. |
 | **Contracts** | The swap seams — issuer, verifier, repository, denylist, responses. |
 | **Concrete implementations** | The defaults bound to each contract. |
 
 This separation is what makes lukk customizable without edits (see [Customization](/customization)). Critically, the rotation **policy** (in `Actions\RotateRefreshToken`) is separate from token **storage** (behind `Contracts\RefreshTokenRepository`), so you can swap the database for Redis without touching the security-critical logic.
 
-Controllers are resource-oriented — one resource (or single-action `__invoke`) controller per concern, using resourceful verbs (`store`/`destroy`/`index`), never one god-controller — and stay thin: run an Action, return a Response contract.
+Controllers are resource-oriented — one resource (or single-action `__invoke`) controller per concern, using resourceful verbs (`store`/`destroy`/`index`), never one god-controller — and stay thin: run an Action, return the response. A controller returns a **Response contract** only where the body is a genuine swap seam — it carries a token pair or a user resource, or it branches on the request (`EmailVerificationResponse`: `204` for JSON, a redirect for a browser). A fixed acknowledgement or a data read (`{"status": "password-reset"}`, the passkey list, JWKS) returns plain JSON or `noContent()` directly; there is nothing for you to swap.
 
 ### The customization hub
 
 Customization is Sanctum-style, through three coordinated mechanisms:
 
-- the static **`Lukk`** hub with closure hooks — `authenticateUsing`, `tokenClaimsUsing`, `useRefreshTokenModel`, `actingAs`, `disableScheduling`;
+- the static **`Lukk`** hub with closure hooks — `authenticateUsing`, `tokenClaimsUsing`, `abilitiesUsing`, `rateLimitKeyUsing`, `registerUsing`, `registerValidation`, `deleteUserUsing`, `useRefreshTokenModel`, `actingAs`, `disableScheduling`;
 - **feature flags** in `config('lukk.features')` — 2FA and passkeys are opt-in and never autoloaded unless enabled;
 - **rebindable contracts** — bind your own implementation of any swap seam in a service provider.
 
@@ -37,7 +37,7 @@ If you've used `Sanctum::usePersonalAccessTokenModel()`, you already know how to
 
 ### Where the concrete code lives
 
-The default implementations bound to each contract live under `Tokens/`, `Refresh/`, `TwoFactor/`, `Passkeys/`, `Support/`, and `Http/Responses/`. The signing/verification material is resolved by `Tokens\Jwt\KeyRing`, with the algorithm pinned from config (never read from the token header). Responses implement Laravel's `Responsable` contract so you can reshape the output.
+The default implementations bound to each contract live under `Tokens/`, `Refresh/`, `Lockout/`, `TwoFactor/`, `Passkeys/`, `Support/`, and `Http/Responses/`. The signing/verification material is resolved by `Tokens\Jwt\KeyRing`, with the algorithm pinned from config (never read from the token header). Responses implement Laravel's `Responsable` contract so you can reshape the output.
 
 ## Client (Nuxt)
 
@@ -52,7 +52,7 @@ flowchart TB
     Future[lukk-react · …] -.-> Core
 ```
 
-`lukk-core` knows the lukk contract and how to *speak* it. It knows nothing about storage, reactivity, or any framework. `lukk-nuxt` supplies those — Nuxt `useState`, route middleware, a Nitro proxy — by wiring the core's hooks. A future `lukk-react` would do the same with React state, reusing the entire core unchanged. This is why the core has zero runtime dependencies: it's pure contract plus plumbing.
+`lukk-core` knows the lukk contract and how to *speak* it. It knows nothing about storage, reactivity, or any framework. `lukk-nuxt` supplies those — Nuxt state, route middleware, a Nitro proxy — by wiring the core's hooks. A future `lukk-react` would do the same with React state, reusing the entire core unchanged. This is why the core has zero runtime dependencies: it's pure contract plus plumbing.
 
 ### The hooks seam
 
@@ -62,7 +62,7 @@ flowchart TB
 - `refresh` — produce a fresh pair on demand.
 - `getConfirmationToken` — supply the step-up token to auto-attach.
 
-A binding fills these in for its world. In `lukk-nuxt`'s direct mode they read/write SSR-safe `useState`; in BFF mode the Nitro proxy fills the same role server-side. Same core, different seam wiring. See [Using lukk-core](/lukk-core).
+A binding fills these in for its world. In `lukk-nuxt`'s direct mode they read and write tokens held on the Nuxt app, client-side only — never in `useState`, which Nuxt serialises into the payload and its chunk-reload persists to `sessionStorage` (lukk-nuxt 0.12.0); in BFF mode the Nitro proxy fills the same role server-side. Same core, different seam wiring. See [Using lukk-core](/lukk-core).
 
 ### One API, two transports
 
@@ -98,7 +98,7 @@ It doesn't stop at shapes — it completes the real ceremonies: a genuine TOTP c
 
 ## Quality gate
 
-Both packages enforce **100% test coverage** (statements, branches, functions, lines) — the same bar on both sides. Lint and type-checking run in CI alongside the coverage gate and the conformance suite. The Nuxt runtime is unit-tested through a lightweight `#imports` mock, so the tests run without booting Nuxt; the PHP suite runs on Testbench against an in-memory sqlite database.
+Both packages enforce **100% test coverage**: lukk-js on statements, branches, functions and lines (Vitest thresholds), lukk on lines (`pest --coverage --min=100`, which measures line coverage only). Mutation testing gates both halves too — Stryker on `lukk-core` and `lukk-nuxt` at a break threshold of 100%, Pest's own mutation testing on the PHP package at a floor of 99 — because 100% coverage says every line ran, not that any test would fail if it behaved differently. Lint and type-checking run in CI alongside the coverage gate and the conformance suite. The Nuxt runtime is unit-tested through a lightweight `#imports` mock, so the tests run without booting Nuxt; the PHP suite runs on Testbench against an in-memory sqlite database.
 
 ## References
 
@@ -112,6 +112,9 @@ Both packages enforce **100% test coverage** (statements, branches, functions, l
 - [RFC 8725 — JWT Best Current Practices](https://www.rfc-editor.org/rfc/rfc8725)
 - [RFC 9068 — JWT Profile for OAuth Access Tokens (`at+jwt`)](https://www.rfc-editor.org/rfc/rfc9068)
 - [RFC 9700 — OAuth 2.0 Security BCP](https://www.rfc-editor.org/rfc/rfc9700)
+- [RFC 7009 — Token Revocation](https://www.rfc-editor.org/rfc/rfc7009) (the logout semantics)
+- [RFC 6265bis — Cookies](https://datatracker.ietf.org/doc/draft-ietf-httpbis-rfc6265bis/) (why `SameSite` doesn't stop a cookie being *set*)
+- [OpenID Connect Core §2](https://openid.net/specs/openid-connect-core-1_0.html#IDToken) (`auth_time`)
 - [OAuth 2.1 (draft)](https://datatracker.ietf.org/doc/draft-ietf-oauth-v2-1/) · [OAuth 2.0 for Browser-Based Apps (draft)](https://datatracker.ietf.org/doc/draft-ietf-oauth-browser-based-apps/)
 
 **OWASP**
@@ -122,7 +125,7 @@ Both packages enforce **100% test coverage** (statements, branches, functions, l
 **Two-factor & passkeys**
 
 - [RFC 6238 — TOTP](https://www.rfc-editor.org/rfc/rfc6238) · [RFC 4226 — HOTP](https://www.rfc-editor.org/rfc/rfc4226) · [RFC 8176 — Authentication Method Reference (`amr`)](https://www.rfc-editor.org/rfc/rfc8176)
-- [W3C WebAuthn Level 2](https://www.w3.org/TR/webauthn-2/) · [NIST SP 800-63B](https://pages.nist.gov/800-63-3/sp800-63b.html)
+- [W3C WebAuthn Level 3](https://www.w3.org/TR/webauthn-3/) · [NIST SP 800-63B-4](https://pages.nist.gov/800-63-4/sp800-63b.html)
 
 **Libraries**
 

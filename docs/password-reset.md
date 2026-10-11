@@ -15,7 +15,7 @@ lukk ships first-party password reset that fits the stateless-JWT model: a **res
 Reset state is Laravel's own `password_reset_tokens` table, driven through the framework's **password broker** (`Password::broker()`). Your user model implements `Illuminate\Contracts\Auth\CanResetPassword` — the same contract Laravel's built-in reset already uses. lukk owns the **link target** and the **session revocation**, not the storage:
 
 1. The user submits their email to `POST /auth/forgot-password`. lukk asks the broker to mint a token and email a reset link — and **always** returns a generic `200`, whether or not the email is registered (no user enumeration).
-2. lukk points Laravel's `ResetPassword` notification at your SPA (`password_reset.frontend_url`), appending `?token=…&email=…`.
+2. lukk points Laravel's `ResetPassword` notification at your SPA (`password_reset.frontend_url`), appending `?token=…&email=…` (or `&token=…` when the URL already has a query). **Set `frontend_url` whenever the feature is on**: unset, the email carries a bare `?token=…&email=…` with no host.
 3. The user opens the link, enters a new password, and your page POSTs `{ token, email, password, password_confirmation }` to `POST /auth/reset-password`. lukk verifies the token through the broker, sets the new password, fires `Illuminate\Auth\Events\PasswordReset`, and — unless you've disabled it — **revokes every existing session** (refresh families + denylist).
 
 There is **no auto-login**: reset succeeds, then the user logs in with their new password. That keeps the reset flow and the login flow (and its 2FA challenge) cleanly separated.
@@ -34,9 +34,13 @@ Your user model must implement `CanResetPassword` (Laravel's default `App\Models
 'password_reset' => [
     'frontend_url' => env('LUKK_RESET_URL'), // e.g. https://app.example.com/reset-password
     'revoke_sessions' => true,                // kill existing sessions on reset (recommended)
+    'revoke_passkeys' => (bool) env('LUKK_RESET_REVOKE_PASSKEYS', false), // also remove every passkey
     'broker' => null,                         // null = your app's default auth.passwords broker
+    'timebox_micros' => (int) env('LUKK_RESET_TIMEBOX_MICROS', 1_000_000),
 ],
 ```
+
+`timebox_micros` (lukk 0.7.0, default one second) is how long every `forgot-password` request, and every failed `reset-password` request, takes, whether or not the address has an account — see [Security notes](#security-notes). `0` switches it off.
 
 Set `broker` (or `LUKK_RESET_BROKER`) only if you reset against a **non-default** `auth.passwords` broker — e.g. a separate admin guard with its own token table. `null` uses `config('auth.defaults.passwords')`.
 
@@ -62,26 +66,34 @@ These routes are registered only when `features.password_reset` is enabled. Both
 
 | Method | Path | Middleware | Purpose |
 |---|---|---|---|
-| `POST` | `/auth/forgot-password` | throttle | Email a reset link. Body `{ email }`. Always `200` (no enumeration). |
-| `POST` | `/auth/reset-password` | throttle | Set the new password. Body `{ token, email, password, password_confirmation }`. `200` on success, `422` on a bad/expired token or a weak/mismatched password. |
+| `POST` | `/auth/forgot-password` | throttle | Email a reset link. Body `{ email }`. Always `200` `{"status": "password-reset-link-sent"}` for a well-formed address (no enumeration); a malformed one is a `422`, and from lukk 0.7.0 so is one carrying a character [sign-in refuses](/authentication#identifier-characters) (a NUL, a zero-width space, …). |
+| `POST` | `/auth/reset-password` | throttle | Set the new password. Body `{ token, email, password, password_confirmation }`. `200` `{"status": "password-reset"}` on success, `422` on a bad/expired token or a weak/mismatched password, and on an `email` carrying a character [sign-in refuses](/authentication#identifier-characters) (lukk 0.7.0). |
 
-The new password is validated with Laravel's `Illuminate\Validation\Rules\Password::defaults()`, so you can tune complexity rules app-wide the usual way.
+Both answer `no-store`. On `reset-password` a bad or expired token, or an unknown address, is one generic `422` keyed on **`email`** (Laravel's `passwords.token` message), never on `token`, so a form shows it there. The broker's per-email throttle applies to sending links, not to `reset`, so there is no "throttled" `422` here; too many attempts from one address meet the route's `lukk-password-reset` limiter, a `429`.
+
+The new password is validated with Laravel's `Illuminate\Validation\Rules\Password::defaults()`, so you can tune complexity rules app-wide the usual way — see [Password policy](/security#password-policy). Under bcrypt a new password over 72 bytes is a `422`, and so is one that is not a string or contains a NUL byte, whatever `Password::defaults()` returns (lukk 0.7.0).
 
 ### Session revocation
 
 The lukk-specific value-add: on a successful reset, `revoke_sessions` (default `true`) runs `RevokeAllSessions` for the user — revoking every refresh-token family and denylisting outstanding access tokens. A password reset almost always means "I lost control of this account," so **killing the pre-existing sessions is the safe default** (an attacker holding a stolen refresh token is logged out the moment the real owner resets).
 
-Set it to `false` only if you have a specific reason to keep other sessions alive across a reset:
+A successful reset also releases the account's [lockouts](/account-lockout) — its `login` counters and its step-up `confirm` counter — whatever `revoke_sessions` says: proving control of the mailbox is stronger evidence than the password, and it's the only self-service way out of a lock.
+
+Set `revoke_sessions` to `false` only if you have a specific reason to keep other sessions alive across a reset:
 
 ```php
 'password_reset' => ['revoke_sessions' => false],
 ```
 
+**Passkeys survive a reset by default**, as the second factor does: a reset proves control of the mailbox, not of the authenticators. That also means a passkey an attacker enrolled while holding the password — or one enrolled on an account squatted before its owner verified it — outlives the recovery. Set `revoke_passkeys` (env `LUKK_RESET_REVOKE_PASSKEYS`, lukk 0.7.0, default `false`) to make a reset mean "start over": it removes every passkey on the account and dispatches [`PasskeyDeleted`](/events#authenticator-events) for each. Keep `revoke_sessions` on with it (the default): a session that survives the reset can step up and enroll a new passkey straight away, which makes removing them pointless.
+
+The new password is written to the column your model names (`getAuthPasswordName()`), the one sign-in reads — up to lukk 0.6 reset and change-password always wrote `password`, so a model with another password column got a `500`.
+
 ### Security notes
 
-- **No user enumeration.** `forgot-password` returns the same `200` for a registered and an unknown email, and the per-email `throttle` is enforced by the broker — so the endpoint can't be used to probe which addresses have accounts. `reset-password` is hardened the same way: every failure (unknown user, bad/expired token, throttled) returns one **generic** `422`, so it never reveals whether an email is registered either.
+- **No user enumeration.** `forgot-password` returns the same `200` for a registered and an unknown email, and the per-email `throttle` is enforced by the broker — so the endpoint can't be used to probe which addresses have accounts. `reset-password` is hardened the same way: every failure (unknown user, bad or expired token) returns one **generic** `422`, so it never reveals whether an email is registered either.
 - **Single-use, expiring tokens.** The reset token is broker-managed: hashed at rest, consumed on success, and invalid after `expire` minutes.
-- **Flatten the timing.** The response body is identical for known and unknown emails, but a registered address does extra work (mint a token, send the mail) before responding. Run mail on a queue (`QUEUE_CONNECTION` other than `sync`, or a `ShouldQueue` notification) so `forgot-password` returns before the email is sent and the two paths take the same time.
+- **Flat timing.** The response body is identical for known and unknown emails, but a registered address does extra work (hash and store a token, send the mail) before responding. From lukk 0.7.0 the whole request is padded to `password_reset.timebox_micros` (default one second, env `LUKK_RESET_TIMEBOX_MICROS`), so both paths take at least that long. `reset-password` is boxed the same way, because its one generic `422` hid a timing difference: a known address with a pending token pays a bcrypt check of the presented token that an unknown one doesn't, and the broker's own 200 ms box is shorter than one derivation at cost 12. A successful reset returns early — its status already says it succeeded. The box only pads — it never shortens — so set it above the broker's own box (`auth.timebox_duration`, 200 ms by default) plus one bcrypt derivation at your cost plus the notification dispatch. **Queue the notification** (`QUEUE_CONNECTION` other than `sync`, or a `ShouldQueue` notification): a synchronous SMTP send can overrun any budget, and it's what you'd do anyway if one second is too long for your users.
 - **Sessions die by default.** `revoke_sessions` closes the "attacker keeps their session after the owner resets" hole — see above.
 - **No auto-login, no token leak.** Reset never mints tokens; the user re-authenticates through the normal login flow. Nothing secret is placed in the redirect URL beyond the broker's own reset token.
 
@@ -91,7 +103,7 @@ Set it to `false` only if you have a specific reason to keep other sessions aliv
 
 ### The flow
 
-1. On your "forgot password" page, call `sendResetLink(email)`. It always resolves (even for an unknown address — the server doesn't enumerate), so show a generic "check your inbox" message regardless.
+1. On your "forgot password" page, call `sendResetLink(email)`. It resolves for an unknown address exactly as for a known one (the server doesn't enumerate), so show a generic "check your inbox" message regardless. It does reject with a `LukkError` for a malformed address (`422`) or a spent throttle (`429`).
 2. The email link lands on your SPA reset page carrying `?token=…&email=…`. Read those from the route, collect a new password, and call `reset({ token, email, password, password_confirmation })`.
 3. On success, send the user to your login page — there's **no auto-login**; they sign in with the new password (and lukk has revoked any pre-existing sessions by default).
 
@@ -103,9 +115,9 @@ const { sending, resetting, sendResetLink, reset } = useLukkPasswordReset()
 
 | Member | Type | What it is |
 |---|---|---|
-| `sending` | `Ref<boolean>` | True while the reset-link request is in flight — bind a button's `disabled` to it. |
-| `resetting` | `Ref<boolean>` | True while the reset submission is in flight. |
-| `sendResetLink(email)` | `(email: string) => Promise<void>` | Ask lukk to email a reset link. Always resolves (no enumeration; throttled). |
+| `sending` | `Readonly<Ref<boolean>>` | True while the reset-link request is in flight — bind a button's `disabled` to it. |
+| `resetting` | `Readonly<Ref<boolean>>` | True while the reset submission is in flight. |
+| `sendResetLink(email)` | `(email: string) => Promise<void>` | Ask lukk to email a reset link. Resolves the same for a known and an unknown address (no enumeration); rejects with a `LukkError` on a malformed address (`422`) or the throttle (`429`). |
 | `reset(input)` | `(input: ResetPasswordInput) => Promise<void>` | Submit the token, email, and new password. Rejects with a `LukkError` (`422`) on a bad token or weak/mismatched password. |
 
 ### The request page
@@ -118,8 +130,13 @@ const email = ref('')
 const sent = ref(false)
 
 async function submit() {
-  await sendResetLink(email.value)
-  sent.value = true // generic — we don't reveal whether the address exists
+  try {
+    await sendResetLink(email.value)
+    sent.value = true // generic — we don't reveal whether the address exists
+  }
+  catch {
+    // 422 (malformed address) or 429 (throttled) — say so; nothing here depends on the account existing.
+  }
 }
 </script>
 
@@ -160,8 +177,8 @@ async function submit() {
     await navigateTo('/login?reset=1') // no auto-login — sign in with the new password
   }
   catch (e) {
-    // 422: bad/expired token or a weak/mismatched password. `LukkError` also carries a
-    // Laravel `errors` bag ((e as LukkError).errors?.password?.[0]) for field-level messages.
+    // 422: a bad/expired token is reported on `email`, a weak/mismatched password on `password` —
+    // both in the `LukkError`'s Laravel `errors` bag ((e as LukkError).errors?.password?.[0]).
     error.value = (e as LukkError).message
   }
 }

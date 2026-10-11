@@ -38,6 +38,8 @@ useLukkForm({ … }, {
 
 With `rememberKey`, a half-filled form survives a route change and back — mount another form with the same key and its `data` is restored. (The reset/`isDirty` baseline isn't remembered; `isDirty` compares the restored data against the original `initial`.) Use it for **plain** drafts: the state is serialized into the SSR payload, so don't remember `File`/`Blob` fields or sensitive values.
 
+The draft is stored under the Nuxt state key `lukk:form:<rememberKey>`, so it can't collide with the rest of your app's state (lukk-nuxt 0.12.0). Earlier releases used `rememberKey` itself as the key, which meant `rememberKey: 'lukk:user'` overwrote the signed-in user. A draft remembered under the old key isn't carried over.
+
 The value type flows through, so `form.data.email` is typed, and the returned form is a `LukkForm<T>`.
 
 ## Basic Usage
@@ -76,7 +78,7 @@ That is the whole loop — no manual error plumbing, no `Accept` headers, no bea
 
 ## Validation Errors
 
-When a submit fails with a Laravel `422`, lukk maps the bag onto `form.errors`, keyed by field. Laravel returns an **array** of messages per field; `form.errors` surfaces the **first** one (the same choice Inertia makes):
+When a submit fails with a Laravel validation bag — a `422`, or any other rejection whose body carries an `errors` object — lukk maps it onto `form.errors`, keyed by field. Laravel returns an **array** of messages per field; `form.errors` surfaces the **first** one (the same choice Inertia makes):
 
 ```jsonc
 // Laravel's 422 body
@@ -88,10 +90,12 @@ form.errors.email   // "The email has already been taken."
 form.hasErrors      // true
 ```
 
-**Every submit clears the errors first**, then re-populates them only from a `422` — so a stale message never lingers into the next attempt.
+**Every submit clears the errors first**, then re-populates them only from the rejection's `errors` bag (whatever its status) — so a stale message never lingers into the next attempt. A field with no message, and a field named `__proto__` or `constructor`, is skipped.
 
 > [!NOTE]
 > **Nested & array fields.** Laravel flattens the bag into **dot notation** — nested objects as `authorization.role`, array items as `users.0.email`. `form.errors` keys them exactly as returned, so read them with bracket access: `form.errors['authorization.role']`. For a nested `form.data`, use **`form.nestedErrors`** — the same errors expanded into a nested object: bind `form.nestedErrors.authorization?.role`, and array fields nest under their index, `form.nestedErrors.users?.[0]?.email`.
+>
+> Both are typed (lukk-nuxt 0.12.0). `form.errors` takes a field of `data` or any dotted path (`` `${string}.${string}` ``), so `form.errors['authorization.role']` type-checks, and `setError` / `clearErrors` accept the same keys. `form.nestedErrors` follows the shape of `data`: an object field nests, an array field is indexed, and a leaf — a scalar, a `Date`, a `File`/`Blob` — is a `string`. A nested field's own message (Laravel can report `items` as well as `items.0.name`) is in `form.errors.items`, not in `nestedErrors`. Earlier releases typed `errors` with the top-level fields only and `nestedErrors` as `Record<string, unknown>`, so both of the reads above failed to type-check.
 
 You can also drive errors yourself (e.g. from a client-side check). All of these are **chainable** (they return the form):
 
@@ -118,7 +122,7 @@ form.submit('post', '/register')    // the generic form
 
 For every verb except `get`, `form.data` is sent as the **request body**; `get` sends the (flat) fields as the **query string**.
 
-Each call **returns a promise of the parsed response body**, and **rejects with a typed [`LukkError`](/lukk-core#errors)** (`{ status, message, errors }`) on failure — so you can `await` the result, or `try/catch` and branch on `status`:
+Each call **returns a promise of the parsed response body**, and on an HTTP error **rejects with a typed [`LukkError`](/lukk-core#errors)** (`{ status, message, errors?, reason?, retryAfter? }`) — so you can `await` the result, or `try/catch` and branch on `status`. Two rejections are not `LukkError`s: a [cancelled](#cancelling-a-submit) submit rejects with the `AbortError` itself, and a network failure with ofetch's `FetchError`.
 
 ```ts
 const user = await form.post<User>('/register') // typed via the generic
@@ -142,16 +146,16 @@ form.post('/posts', { headers: { 'X-Idempotency-Key': key } })
 Pass `onSuccess`, `onError`, and `onFinish` in the submit options. They run in addition to the returned promise, and mirror Inertia's callbacks:
 
 ```ts
-form.post('/posts', {
-  onSuccess: (post) => navigateTo(`/posts/${post.id}`),
+form.post<Post>('/posts', {
+  onSuccess: (post) => navigateTo(`/posts/${post.id}`), // `post` is a Post
   onError:   (error) => console.warn(error.message),
   onFinish:  () => { /* runs on success AND failure — like `finally` */ },
 })
 ```
 
-- `onSuccess(result)` — the parsed response body.
-- `onError(lukkError)` — the typed error (also rethrown to your `await`/`catch`).
-- `onFinish()` — always runs, even if the request fails or `onSuccess` throws.
+- `onSuccess(result)` — the parsed response body, typed by the verb's generic (`form.post<Post>(…)`); without one it is `unknown`.
+- `onError(error)` — what the submit rejects with (also rethrown to your `await`/`catch`): typed as a `LukkError`, though a cancelled or network-failed submit hands it the `AbortError` or `FetchError` instead.
+- `onFinish()` — always runs: on success and on failure, even when `onSuccess` or `onError` throws (lukk-nuxt 0.12.0 for `onError`).
 
 ## Form State
 
@@ -184,7 +188,7 @@ You may re-baseline the defaults with `defaults` — for example after loading a
 ```ts
 const form = useLukkForm({ title: '', body: '' })
 
-const post = await $lukk('/posts/1')   // load current values
+const post = await useLukkFetch()<{ title: string, body: string }>('/posts/1') // load current values
 form.data.title = post.title
 form.data.body = post.body
 form.defaults()                         // baseline := current data → isDirty is false again
@@ -243,13 +247,13 @@ Force multipart even without a file with `forceFormData: true`. For a `<input ty
 
 ## Cancelling a Submit
 
-`form.cancel()` aborts the most-recent in-flight submit; it then rejects with an `AbortError`:
+`form.cancel()` aborts the most-recent in-flight submit; it then rejects with the `AbortError` itself — a `DOMException` named `AbortError` — rather than the `FetchError` ofetch wraps it in (lukk-nuxt 0.12.0; before, `error.name === 'AbortError'` never matched). `onError` and `onFinish` still run:
 
 ```ts
 const form = useLukkForm({ q: '' })
 
 async function search() {
-  form.cancel()                 // drop any previous in-flight search
+  form.cancel()                 // optional: a new submit aborts the previous one anyway
   try {
     results.value = await form.get('/search')
   }
@@ -259,7 +263,9 @@ async function search() {
 }
 ```
 
-If you pass your own `signal` in the submit options, that wins and `cancel()` is a no-op for that submit.
+If you pass your own `signal` in the submit options, that wins and `cancel()` is a no-op for that submit; aborting your signal (without a reason of your own) rejects with the `AbortError` the same way.
+
+**A new submit supersedes the one in flight** (lukk-nuxt 0.12.0), as Inertia's does: the earlier submit is aborted and rejects with the `AbortError`. One that settles anyway — it ran under a `signal` of your own, which a new submit can't abort — still resolves or rejects its own promise and runs its own hooks, but leaves `processing`, `errors`, `wasSuccessful` / `recentlySuccessful` and the defaults to the newer submit. Before, a late `422` from the first submit overwrote the second's success, and `processing` went `false` while the second was still out.
 
 ## Notes & Caveats
 

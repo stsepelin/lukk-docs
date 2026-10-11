@@ -17,7 +17,29 @@ public function boot(): void
 }
 ```
 
-`Lukk::actingAs()` (for authenticating a user in your own tests) and `Lukk::disableScheduling()` (to take over the `lukk:prune` cadence — see [Deployment](/deployment)) live on the same hub.
+The full set of hooks:
+
+| Hook | What it replaces | See |
+|---|---|---|
+| `authenticateUsing(Closure)` | The credential check at login | [below](#custom-login-logic) |
+| `tokenClaimsUsing(Closure)` | Adds custom claims to every access token | [below](#custom-token-claims) |
+| `abilitiesUsing(Closure)` | The derived ability grant, per mint | [Abilities](/abilities#setup) |
+| `rateLimitKeyUsing(Closure)` | The identity every throttle buckets on | [below](#lukk-ratelimitkeyusing) |
+| `registerUsing(Closure\|string)` | The user create at `POST /auth/register` | [Registration](/registration#customizing-the-user-s-fields) |
+| `registerValidation(Closure)` | The registration rules | [Registration](/registration#customizing-the-user-s-fields) |
+| `deleteUserUsing(Closure)` | Disposing of the user row at erasure (e.g. anonymize) | [Account deletion](/account-deletion#anonymizing-instead-of-deleting) |
+| `useRefreshTokenModel(string)` | The refresh-token Eloquent model | [below](#swapping-the-refresh-token-model) |
+| `disableScheduling()` | lukk's own `lukk:prune` schedule, so you set the cadence | [Deployment](/deployment) |
+| `actingAs($user, $guard, $abilities)` | Authenticates a user in your own tests | — |
+
+And a few read-only helpers, for code of your own that must agree with lukk:
+
+| Helper | Answers |
+|---|---|
+| `Lukk::rateLimitKey(Request)` | The throttle identity lukk uses for this request (your `rateLimitKeyUsing` result, or the normalized address) — key your own limiters on it. |
+| `Lukk::usesAbilities(?string $guard)` | Whether abilities are in use on that guard: a callback is set **or** `features.abilities` is on. Not the same as "is `abilitiesUsing` set" — a pinned-grant-only install has no callback. |
+| `Lukk::enforcesTwoFactor(?string $guard)` | Whether an enrolled second factor is challenged on that guard — `true` unless `features.two_factor` is explicitly `false`/`0`/`'0'` (unset fails closed). |
+| `Lukk::currentGuard()` / `Lukk::onGuard($name, $callback)` / `Lukk::useGuard($name)` | The lukk guard active for this request; run a callback with another active (restored afterwards); set it outright, as lukk's per-guard route middleware does. See [Multiple guards](/multiple-guards). |
 
 ## Custom login logic
 
@@ -42,7 +64,9 @@ Lukk::authenticateUsing(function (Request $request) {
 > If your callback authenticates on a **different field**, set `lukk.username` to match it. The login throttle and the [account lockout](/account-lockout) both key on that field — with a mismatch the lockout never sees an identifier to count and silently does nothing.
 
 
-The login **throttle** still wraps your closure — failed attempts are rate-limited exactly as on the default path. **Constant-time** behaviour, however, becomes *your* responsibility: the package's unknown-user timing equalizer only runs on the built-in email/password path, so a closure that does `User::where(...)->first()` and hashes only when the user exists leaks a user-enumeration timing oracle. Make your closure take the same time whether or not the account exists — e.g. always run a `Hash::check` against a dummy hash when no user is found.
+The login **throttle** still wraps your closure — failed attempts are rate-limited exactly as on the default path — and so does the [sign-in timebox](/configuration#sign-in-timebox) (lukk 0.7.0): a failed attempt is padded to `login_timebox_micros` whatever your closure did. **Equal work** is still *your* responsibility, though: the package's unknown-user equalizer (one key derivation on every failing path) only runs on the built-in path, and the box pads a fast failure but never shortens a slow one. A closure that does `User::where(...)->first()` and hashes only when the user exists stays inside the box only while one hash is shorter than the budget — make it do the same work either way, e.g. always run a `Hash::check` against a dummy hash when no user is found.
+
+Two more things move to your side with a closure. lukk's re-read that shuts out a sign-in racing a [password change or reset](/security#login-responses) takes its baseline from the stored password read right *after* your callback returns (the model you return may not have it loaded), so a change landing before that read isn't caught. And the bcrypt 72-byte refusal at sign-in (see [Password policy](/security#password-policy)) is the built-in path's; your closure decides for itself.
 
 ## Custom token claims
 
@@ -57,7 +81,9 @@ Lukk::tokenClaimsUsing(fn ($userId) => [
 ```
 
 > [!NOTE]
-> Your claims are merged in, but the standard claims (`sub`, `exp`, `iss`, `aud`, `jti`, `fid`, …) always win and cannot be overridden.
+> Your claims are merged in, but the standard claims (`sub`, `exp`, `iss`, `aud`, `jti`, `fid`, …) always win and cannot be overridden. So do the reserved claims `pin` and (from lukk 0.7.0) `amr` and `auth_time`: a hook can neither forge an [authentication method](/tokens-and-rotation#the-amr-claim) the session never used nor erase the real one.
+>
+> `scope` is reserved only once [abilities](/abilities) are in use — an `abilitiesUsing` callback is registered, or `features.abilities` is on for the guard. Before that, a `scope` your hook returns is signed as is, and `lukk.ability` / `lukk.abilities` honour it. Don't emit one: use `abilitiesUsing` instead, and the claims hook stays out of authorization.
 
 ## Swapping the refresh token model
 
@@ -69,6 +95,29 @@ use App\Models\RefreshToken;
 
 Lukk::useRefreshTokenModel(RefreshToken::class);
 ```
+
+The model may live on its own connection (`protected $connection`). Rotation and bulk revocation open their transaction on that connection (lukk 0.7.0) — earlier releases opened it on the default one, so the row lock was taken in autocommit and released at once, and rotation and reuse detection were not atomic.
+
+**Model events don't fire for lukk's writes** (lukk 0.7.0). The default repository stores each refresh token with `saveQuietly()`: the write runs inside the rotation's transaction, under the parent row's lock, where no application code may run. An observer on your model used to run there — serialising the family's refreshes behind it and, on PostgreSQL, turning a swallowed failing query into a `COMMIT` that silently rolled back — and a `creating` listener returning `false` cancelled the write, so rotation handed back a refresh token that was never stored. So `creating`, `created`, `saving` and `saved` no longer fire for the rows lukk persists, and if the save still reports that nothing was written, `persist()` throws a `RuntimeException` rather than return a token it never stored. Audit sessions from lukk's [events](/events) instead (`RefreshTokenReused`, `SessionUnclaimed`, and your own login and logout listeners).
+
+### Filling your own columns
+
+With no `creating` event, **a column you used to fill from one is no longer filled** — a multi-tenancy `BelongsToTenant` trait stamping `tenant_id`, for one. On a `NOT NULL` column every sign-in and refresh then fails. Fill it as the model is **built** instead of as it is saved:
+
+- an `$attributes` default on your `useRefreshTokenModel` subclass, or
+- the trait's `initialize{TraitName}()` method, which Eloquent calls from the model's constructor without dispatching any event:
+
+```php
+trait BelongsToTenant
+{
+    public function initializeBelongsToTenant(): void
+    {
+        $this->tenant_id ??= tenant()->id;
+    }
+}
+```
+
+Overriding `persist()` in a subclass of `DatabaseRefreshTokenRepository` works too. Either way the code runs **under the rotation's row lock**, so read a value already in memory — the resolved tenant, a config value — and never query.
 
 > [!NOTE]
 > **`$timestamps = false` is safe here.** [`claim_seconds`](/configuration#refresh-behavior) recognises a session's original refresh token by its lineage — the row persisted with no predecessor — not by `created_at`, and the window itself is measured from the marker lukk wrote at sign-in. Timestamps are still worth keeping for the data-subject export, which reports when each session began.
@@ -84,15 +133,31 @@ use App\Auth\RedisRefreshTokenRepository;
 $this->app->bind(RefreshTokenRepository::class, RedisRefreshTokenRepository::class);
 ```
 
-Three fields on `RefreshTokenRecord` carry policy that the repository is the only thing able to supply, and all of them fail quietly if you leave them out:
+Four fields on `RefreshTokenRecord` carry policy that the repository is the only thing able to supply, and all of them fail quietly if you leave them out:
 
 - **`original`** — whether this row is the family's first, the one you were handed with a `null` `$previousId`. It is how [`claim_seconds`](/configuration#refresh-behavior) recognises the refresh token the sign-in itself issued, and it is the field to return. It is a tri-state: leave it `null` ("I can't say") and lukk falls back to `createdAt`. Never answer `true` for a row you are unsure about — a successor reported as the original is a session in active use being logged out.
 - **`createdAt`** — the row's creation time, and the fallback for `claim_seconds` when `original` is unknown. It only compares mint times, so a successor minted within a couple of seconds of the sign-in reads as the original; that tolerance is a fixed constant, deliberately not `leeway` (both timestamps come from the same server in one sign-in, so only write skew has to be absorbed). Leave **both** fields out and the revocation is disabled entirely (lukk logs one warning per worker process and carries on).
 - **`scope`** — the family's pinned [ability](/abilities) grant. `null` and `''` are different answers: `null` means *derive the grant on every mint*, `''` means *pinned to nothing*. Round-trip the empty string. Collapsing the two lets the most restricted token in the system widen to its subject's full grant on the first refresh.
+- **`amr`** (lukk 0.7.0) — the session's authentication record: its [methods](/tokens-and-rotation#the-amr-claim) and its sign-in time ([`auth_time`](/tokens-and-rotation#the-auth-time-claim)), as JSON (`{"amr":[…],"auth_time":…}`). `persist()` takes a trailing `?string $amr = null`; treat the string as **opaque** — store what you are given and return it here unchanged, as you do `scope`. A repository that ignores it keeps working, but the session has no `amr` and no `auth_time` after the first refresh, so the password step-up's multi-factor allowance never applies to it.
+
+```php
+public function persist(
+    int|string $userId, string $familyId, ?string $previousId, string $tokenHash,
+    int $expiresAt, ?string $scope = null, ?string $amr = null,
+): void
+```
+
+PHP raises a fatal on a mismatched signature, so an implementation (or a `DatabaseRefreshTokenRepository` subclass overriding `persist()`) written for 0.6 fails at once rather than silently.
+
+Two behaviours the signatures can't express:
+
+- **`revokeUserFamilies()` / `revokeUserFamiliesExcept()` revoke by the ids they read**, never by the user again, and return exactly those ids. Revoking "every row for this user" in a second statement also catches a session that committed between the read and the update — under PostgreSQL READ COMMITTED or InnoDB — which is then revoked in the table but never denylisted or reported, and its user is signed out on the next refresh with nothing to show why.
+- **A family id that isn't a UUID names no family.** lukk mints every family as a UUID, but a co-issuer's `fid` can be anything (`42`, `"sess_42"`). The default repository answers such an id as "no family here" — not pinned, nothing to revoke, nothing excepted — without querying, because PostgreSQL's native `uuid` column refuses the comparison with an error (lukk 0.7.0). A replacement should answer it the same way rather than throw.
+- **A revoked row is dead.** `revokeFamily()` is family-wide, so a record carrying `revokedAt` means that family's revoke has already run, and lukk does no further work when one is presented.
 
 ## Reshaping responses
 
-The login, refresh, and logout responses are `Responsable` contracts. Rebind one to change the body shape, add headers, or switch between JSON and cookies:
+The token-bearing and branching responses are `Responsable` contracts. Rebind one to change the body shape, add headers, or switch between JSON and cookies:
 
 ```php
 use Lukk\Contracts\LoginResponse;
@@ -101,10 +166,10 @@ use App\Http\Responses\MyLoginResponse;
 $this->app->bind(LoginResponse::class, MyLoginResponse::class);
 ```
 
-The response contracts are `LoginResponse`, `RefreshResponse`, `LogoutResponse`, and `TwoFactorChallengeResponse`.
+The response contracts are `LoginResponse`, `RefreshResponse`, `LogoutResponse`, `RegisterResponse`, `TwoFactorChallengeResponse` and `EmailVerificationResponse`. A contract exists only where the body is a genuine swap seam — it carries a token pair or a user resource, or it branches on the request (`EmailVerificationResponse` is a `204` for a JSON client and a redirect to `frontend_url` for a browser). Fixed acknowledgements and data reads (`{"status": "password-reset"}`, the passkey list, JWKS, the account export) return JSON directly; there is nothing to swap.
 
 > [!WARNING]
-> **`LogoutResponse` takes `bool $clearRefreshCookie` (lukk 0.7.0), and a rebound implementation must honour it.** It is `false` when `POST /auth/logout` did not accept the refresh cookie from that request — none was presented, or the request had a shape a cross-site form could produce. Sending the clearing `Set-Cookie` anyway re-opens the forced-logout CSRF the check exists to close: a clearing cookie on a `204` is stored even after a fully cross-site top-level navigation, so any page could sign your visitors out.
+> **`LogoutResponse` takes `bool $clearRefreshCookie` (lukk 0.7.0, default `true`), and a rebound implementation must honour it.** It is `false` when `POST /auth/logout` did not accept the refresh cookie from that request — none was presented, or the request had a shape a cross-site form could produce. Sending the clearing `Set-Cookie` anyway re-opens the forced-logout CSRF the check exists to close: a clearing cookie on a `204` is stored even after a fully cross-site top-level navigation, so any page could sign your visitors out.
 >
 > ```php
 > public function __construct(private readonly bool $clearRefreshCookie = true) {}
@@ -131,10 +196,43 @@ The cryptographic and revocation seams are contracts too. Rebind `Contracts\Toke
 | `RefreshTokenRepository` | `DatabaseRefreshTokenRepository` | Persists refresh tokens and families. |
 | `Denylist` | `CacheDenylist` | Records and checks revoked `jti`/`fid` values. |
 | `LoginResponse` / `RefreshResponse` / `LogoutResponse` | built-in | Shape the HTTP responses. |
+| `RegisterResponse` | built-in | Shapes the [registration](/registration) response (token pair, challenge, or `201`). |
+| `Http\Requests\RegisterRequest` | built-in | The registration rules. Bind a subclass overriding `rules()` (an alternative to `registerValidation()`); lukk's string/NUL/72-byte password checks still run after it. |
 | `TwoFactorChallengeResponse` | built-in | Shapes the 2FA login challenge. |
+| `EmailVerificationResponse` | built-in | Answers a verified link: `204` for JSON, a redirect to `frontend_url` for a browser. |
+| `LockoutRepository` | `DatabaseLockoutRepository` | Stores the [account-lockout](/account-lockout) counters; also `forget()` for erasure and `summariesForSubjects()` for the export — called on whatever is bound, so answer `0` / `[]` for nothing stored. |
+| `ReservesLockoutAttempts` (optional, extends `LockoutRepository`) | implemented by `DatabaseLockoutRepository` | Counts an attempt without locking (`reserve()`) and locks only once the check failed (`lockIfSpent()`), so a correct credential on the attempt that reaches the cap doesn't lock and fire `AccountLocked` (lukk 0.7.0). Implement it on a custom lockout store to get that; without it the store keeps the old behaviour. See [Swapping the store](/account-lockout#swapping-the-store). |
 | `TwoFactorProvider` | `Google2FaTotpProvider` | Generates and verifies TOTP codes. |
-| `WebAuthnCeremony` | `SpomkyWebAuthnCeremony` | Performs WebAuthn registration/assertion. |
+| `WebAuthnCeremony` | `SpomkyWebAuthnCeremony` | Performs WebAuthn registration/assertion, and reports what an assertion proved. |
 | `PasskeyRepository` | `DatabasePasskeyRepository` | Persists passkey credentials. |
+
+Two more contracts describe your **user model** rather than a container binding: `TwoFactorAuthenticatable` (what the `HasTwoFactorAuthentication` trait provides for [two-factor](/two-factor-authentication)) and `HasTokenAbilities` (what the trait of the same name provides for [abilities](/abilities)). lukk only narrows to them in PHPDoc, so using the trait is enough; implementing the interface as well lets your own static analysis check it.
+
+::: warning Implementing `WebAuthnCeremony` yourself (lukk 0.7.0)
+`verifyAssertion()` returns a `Lukk\Support\PasskeyAssertion` (`signCount`, `userVerified`, `multiFactor`) instead of an `int`; it and `authenticationOptions()` take an optional `?string $userVerification` (`required`/`preferred`/`discouraged`, or `null` for your configured value), and there is a new `isMultiFactor(PasskeyRecord): bool`.
+
+```php
+public function authenticationOptions(string $challenge, array $allowCredentialIds, ?string $userVerification = null): array;
+
+public function verifyAssertion(array $response, string $challenge, PasskeyRecord $stored, ?string $userVerification = null, int|string|null $owner = null): PasskeyAssertion;
+
+public function isMultiFactor(PasskeyRecord $stored): bool;
+```
+
+**Enforce** `$userVerification` on the assertion, not only in the options — a step-up passes `required` when the account can reach AAL2. Report `multiFactor` true only when the assertion carries the UV flag **and** the credential was already `uvInitialized` before this ceremony; read that before verifying, because a WebAuthn library typically updates it as part of verification. lukk skips an enrolled TOTP on this answer. `isMultiFactor()` reports whether a stored credential has shown user verification, `false` when unknown. `$owner` is the account a step-up has already identified, or `null` at sign-in: pass it to your library as the expected user handle (WebAuthn L3 §7.2 step 6), so a returned `userHandle` naming another account is refused, and a non-discoverable key that omits it still works. A mismatched method is a fatal when your class loads, so it surfaces on the first passkey request rather than at boot.
+:::
+
+::: warning Implementing `PasskeyRepository` yourself (lukk 0.7.0)
+`updateSignCount()` returns `bool` — whether the row was written:
+
+```php
+public function updateSignCount(string $credentialId, int $signCount): bool;
+```
+
+Make the write **forward-only** and conditional — update only while the stored counter is below `$signCount` — and report whether it moved. Of two concurrent assertions presenting the same counter, exactly one may win; lukk treats the loser's non-zero counter as one that did not advance, refuses it and fires [`PasskeyCloneDetected`](/events#passkeyclonedetected), as WebAuthn L3 §6.1.1 directs. Always answering `true` silently loses that check; always answering `false` refuses every non-zero counter.
+
+**A rebound store is now called on every install.** Account [erasure](/account-deletion) (`deleteForUser()`), the [export](/account-deletion#the-export) (`summariesForUser()`) and a reset with [`revoke_passkeys`](/password-reset#session-revocation) (`summariesForUser()` + `delete()`) used to be skipped unless a table literally named `passkeys` existed, so a Redis or remote store was never reached: erasure reported success while the passkeys survived. They now call whatever is bound, so each method must answer an empty or not-yet-provisioned store without throwing — `[]` and `0`. The shipped `DatabasePasskeyRepository` answers an unpublished table itself, on its model's own connection and table name.
+:::
 
 ::: warning Replacing `PasskeyRepository` or `RefreshTokenRepository` under multiple guards
 Both are **guard-scoped**: an account is `(guard, id)`, not `id`, because [providers are separate tables](/multiple-guards) where `users.id === admins.id` is the ordinary case. Every method must honour that — including `findByCredentialId`, which takes a credential id and *no* user and is therefore the authentication decision itself.
@@ -143,8 +241,6 @@ The single exception is `PasskeyRepository::existsByCredentialId()`, which must 
 
 Bind a replacement with `bind`, not `singleton` — the active guard is per-request, and a memoized instance carries the previous request's guard into the next one.
 :::
-
-That's the whole customization surface. For the design rationale behind these seams, see [Architecture](/architecture); for the events lukk fires at the security-relevant moments, see [Events](/events). Questions or contributions are welcome on the [lukk](https://github.com/stsepelin/lukk) and [lukk-js](https://github.com/stsepelin/lukk-js) repositories.
 
 ## `Lukk::rateLimitKeyUsing()`
 
@@ -158,3 +254,5 @@ Lukk::rateLimitKeyUsing(fn (Request $request) => 'tenant-'.$request->user()?->te
 ```
 
 The callback runs on every throttled request, so keep it cheap. The value must be **unforgeable** — it also buckets the login limiter, so a spoofable header would let an attacker mint a fresh bucket per request — and it is used verbatim as part of a cache key, so namespace anything untrusted. An empty return falls back to the address. Under a long-running worker (Octane) the closure outlives the request that registered it: derive everything from the `$request` argument, never capture it.
+
+That's the whole customization surface. For the design rationale behind these seams, see [Architecture](/architecture); for the events lukk fires at the security-relevant moments, see [Events](/events). Questions or contributions are welcome on the [lukk](https://github.com/stsepelin/lukk) and [lukk-js](https://github.com/stsepelin/lukk-js) repositories.
