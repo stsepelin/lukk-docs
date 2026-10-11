@@ -122,16 +122,16 @@ lukk `0.7.0`'s smaller changes, each with what to check:
 
 | Change | Impact | What to do |
 |---|---|---|
-| The default guard must resolve users from the provider sign-in checks against: `auth.guards.<default>.provider` (or, naming none, `auth.defaults.provider`) must equal [`lukk.user_provider`](/configuration#guard-provider), or boot throws naming both. | **High** if they differ | Point both at the same provider. Otherwise a password from one table signed in as the row with the same id in the other. The default (`users` on both) is unaffected. [Details](/multiple-guards#setup). |
-| Sign-in, registration, forgot- and reset-password refuse an identifier carrying a [control, format or enclosing character, U+034F, or whitespace other than the ASCII space](/authentication#identifier-characters) with a `422`; registration's `name` refuses NUL. The login-throttle fold strips those characters (and combining marks) and trims Unicode whitespace. | Low | Find accounts whose stored identifier contains one before upgrading — they can no longer type it to sign in (`WHERE email ~ '[[:cntrl:]]'` on PostgreSQL, or scan in PHP with `Lukk\Support\Identifier::INVISIBLE`). Buckets for such identifiers restart once, and a held `idn:` lock for one is no longer reached by it. |
+| The default guard must resolve users from the provider sign-in checks against: `auth.guards.<default>.provider` (or, naming none, `auth.defaults.provider`) must read the same users as [`lukk.user_provider`](/configuration#guard-provider), or boot throws naming both. Two provider names over the same users boot: the same `model` under the `eloquent` driver, the same `table` and `connection` under `database`, or — for any other driver — identical `auth.providers` entries. | **High** if they read different users | Point both at the same provider. Otherwise a password from one table signed in as the row with the same id in the other. The default (`users` on both) is unaffected. [Details](/multiple-guards#setup). |
+| Sign-in, registration, forgot- and reset-password refuse an identifier carrying a [control, format or enclosing character, U+034F, or whitespace other than the ASCII space](/authentication#identifier-characters) with a `422`; registration's `name` refuses NUL. ZWNJ, ZWJ and U+20E3 COMBINING ENCLOSING KEYCAP are accepted. The login-throttle fold strips those characters (and combining marks, ZWNJ, ZWJ and the keycap) and trims Unicode whitespace. | Low | Find accounts whose stored identifier contains a refused character before upgrading — they can no longer type it to sign in ([how](#finding-identifiers-sign-in-now-refuses)). Buckets for such identifiers restart once, and a held `idn:` lock for one is no longer reached by it. |
 | With `Lukk::authenticateUsing()` reading a field other than `lukk.username`, the IP-independent login bucket is skipped (an empty identifier was one bucket for everybody) and the per-address bucket keys on the address alone. | Low | Point [`lukk.username`](/configuration#guard-provider) at your field to keep the account cap. |
 | The [lockout](/account-lockout#the-attempt-is-consumed-before-the-password-is-checked) still reserves an attempt before checking it, but locks — and fires `AccountLocked` — only once the check failed. The attempt that reaches the cap with the right credential signs in and fires neither `AccountLocked` nor `AccountReleased`. New optional contract `Lukk\Contracts\ReservesLockoutAttempts`. | Low — only if you implement `LockoutRepository` or listen for lockout events | A custom store keeps the old behaviour through `recordFailure()`; implement `reserve()` and `lockIfSpent()` to get the new one ([contract](/account-lockout#swapping-the-store)). |
 | The two-factor per-account limiter counts an attempt before checking it, so a concurrent burst gets `rate_limits.two_factor.max_attempts` guesses and the rest a `429` on `code`. | Low | None. |
 | With `block_unverified_login` on, an unverified account's two-factor challenge is refused (`403`) before the factor is checked, so no recovery code is spent on it. | Low | None. |
 | [`RecoveryCodeUsed`](/events#recoverycodeused) fires when a recovery code is spent (`$user`, `$remaining`). | Low | Listen for it to notify the user and prompt new codes (NIST SP 800-63B-4 §4.2). |
-| Refresh-token writes use `saveQuietly()`: model events (`creating`/`created`/`saving`/`saved`) no longer fire for rows lukk stores, a listener can't cancel one, and `persist()` throws if nothing was written. | Low — only if you observe a [`useRefreshTokenModel`](/customization#swapping-the-refresh-token-model) model | Audit sessions from lukk's events instead (`RefreshTokenReused`, `SessionUnclaimed`, your own login/logout listeners). |
+| Refresh-token writes use `saveQuietly()`: model events (`creating`/`created`/`saving`/`saved`) no longer fire for rows lukk stores, a listener can't cancel one, and `persist()` throws if nothing was written. | Low — only if you observe a [`useRefreshTokenModel`](/customization#swapping-the-refresh-token-model) model | Audit sessions from lukk's events instead (`RefreshTokenReused`, `SessionUnclaimed`, your own login/logout listeners). A column filled from `creating` (a tenant trait's `tenant_id`) is no longer filled — on a `NOT NULL` column every sign-in and refresh then fails; [fill it as the model is built](/customization#filling-your-own-columns). |
 | The [export](/account-deletion#the-export) gains `password_reset`, `two_factor.pending`, `two_factor.recovery_codes_remaining`, and per session `amr` and `authenticated_at`. `ExportAccount` takes the broker name as a trailing optional argument. | Low | None, unless you build `ExportAccount` yourself. |
-| A `lukk-jwt` guard over an integer-keyed Eloquent model answers `401`, without a query, for a `sub` that isn't an integer; a non-UUID `fid` names no family (no PostgreSQL `500`). | Low unless a co-issuer mints tokens | None — a co-issuer's non-numeric subjects against such a guard were a `500` before. |
+| A `lukk-jwt` guard answers `401`, not a PostgreSQL `500`, for a `sub` its user column's type refuses (SQLSTATE `22P02` or `22003`): `"admin"` against any integer column, or a number past a 32-bit `increments('id')`. For the stock auto-incrementing `id` a non-integer `sub` is refused without a query; for any other shape the refusal of the subject's own lookup is read as no user (the same SQLSTATE from another statement, such as an eager-loaded relation, is still a reported `500`). A non-UUID `fid` names no family (no PostgreSQL `500`). | Low unless a co-issuer mints tokens | None — a co-issuer's non-numeric subjects were a `500` before. Inside a transaction of yours an Eloquent provider's lookup runs in a savepoint, so the refusal doesn't abort it; a refusal on a connection that savepoint didn't cover is rethrown there, as before. [Details](/tokens-and-rotation#claim-validation). |
 | `DELETE /auth/sessions/others` answers `409` for a token whose `fid` is empty, as for one without `fid`; `DELETE /auth/sessions` also denylists the presenting token when it names no family of lukk's. | Low | None. Before, an empty `fid` logged out every device, and logout-all left a co-issuer's bearer live. |
 | A failed sign-in takes at least [`login_timebox_micros`](/configuration#sign-in-timebox) (500 ms); every `forgot-password` and every failed `reset-password` at least [`password_reset.timebox_micros`](/password-reset#setup) (one second). A successful sign-in or reset returns early. | Low | Raise either if your slowest real path takes longer — the box pads, it never shortens. Queue the reset notification. |
 | [`leeway`](/configuration#refresh-behavior) is clamped to 0–300 s for every token lukk decodes. | Low | A larger `LUKK_LEEWAY` now acts as 300; fix the clock skew instead. |
@@ -173,6 +173,35 @@ lukk `0.7.0`'s smaller changes, each with what to check:
 | An explicit `null` `lukk.path` (an unset `env()`) mounts the routes at `auth`, not at the root. | Low | Set the path you want explicitly. |
 
 See [lukk UPGRADE.md](https://github.com/stsepelin/lukk/blob/main/UPGRADE.md#upgrading-to-070-from-06x) for the full text of each.
+
+### Finding identifiers sign-in now refuses
+
+An account whose **stored** identifier carries a character lukk 0.7.0 [refuses](/authentication#identifier-characters) can no longer type it to sign in, so find those accounts before upgrading. The authoritative check is the pattern lukk validates with, run in PHP — swap in your table and [`lukk.username`](/configuration#guard-provider) column:
+
+```php
+use Illuminate\Support\Facades\DB;
+use Lukk\Support\Identifier;
+
+DB::table('users')->select(['id', 'email'])->lazyById()->each(function ($row) {
+    if (preg_match(Identifier::INVISIBLE, (string) $row->email) === 1) {
+        echo $row->id, PHP_EOL;
+    }
+});
+```
+
+The SQL below matches the same set as PCRE2 10.49's Unicode tables (Unicode 17; checked on PostgreSQL 17 and MySQL 8.4). A later Unicode version can add format characters that only the PHP scan sees. On PostgreSQL, with `standard_conforming_strings` on (the default):
+
+```sql
+SELECT id, email FROM users WHERE email ~ '[\u0001-\u001F\u007F-\u00A0\u00AD\u034F\u0488-\u0489\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u1680\u180E\u1ABE\u2000-\u200B\u200E-\u200F\u2028-\u202F\u205F-\u2064\u2066-\u206F\u20DD-\u20E0\u20E2\u20E4\u3000\uA670-\uA672\uFEFF\uFFF9-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0001\U000E0020-\U000E007F]';
+```
+
+On MySQL 8.0.4+ (ICU regular expressions). With `NO_BACKSLASH_ESCAPES` in `sql_mode`, the doubled backslashes reach the regex as written and it fails with error 3697 — run it in a session without that mode, or halve them:
+
+```sql
+SELECT id, email FROM users WHERE email REGEXP '[\\x{0000}-\\x{001F}\\x{007F}-\\x{00A0}\\x{00AD}\\x{034F}\\x{0488}-\\x{0489}\\x{0600}-\\x{0605}\\x{061C}\\x{06DD}\\x{070F}\\x{0890}-\\x{0891}\\x{08E2}\\x{1680}\\x{180E}\\x{1ABE}\\x{2000}-\\x{200B}\\x{200E}-\\x{200F}\\x{2028}-\\x{202F}\\x{205F}-\\x{2064}\\x{2066}-\\x{206F}\\x{20DD}-\\x{20E0}\\x{20E2}\\x{20E4}\\x{3000}\\x{A670}-\\x{A672}\\x{FEFF}\\x{FFF9}-\\x{FFFB}\\x{110BD}\\x{110CD}\\x{13430}-\\x{1343F}\\x{1BCA0}-\\x{1BCA3}\\x{1D173}-\\x{1D17A}\\x{E0001}\\x{E0020}-\\x{E007F}]';
+```
+
+ZWNJ, ZWJ and the keycap are accepted, so neither query matches them. On PostgreSQL two accounts may differ only by one of them (`ab` and `a\u{200D}b`): the throttle folds them onto one bucket, as it does accounts differing only in case or accents. MySQL's collation already treats them as one value, so `unique` refuses the second.
 
 > [!WARNING]
 > **lukk `0.6.0` adds a `guard` column to `passkeys`** and turns **account deletion on by default**.
@@ -266,7 +295,9 @@ The proxies refuse more:
   deploy's `SCRIPT_NAME` has — a length the proxy can't know — so **a path that names a `.php` anywhere and
   holds lukk's last base segment (`auth`, ended by `/`, `\`, `?`, `#` or the end) anywhere is refused**.
   That refuses some paths that never reach lukk, such as `/api/oauth/callback.php`: rename such a route, or
-  serve it without `.php`. Paths without `.php` are judged as before. It still can't see the front
+  serve it without `.php`. So is **a path naming more than four `.php`** (in any decoding round), whatever
+  it holds: each is a reading judged in full, so their number is bounded rather than the cost being
+  quadratic in the path. Paths without `.php` are judged as before. It still can't see the front
   controller where no `.php` names it — shared hosting whose `.htaccess` rewrites into `public/index.php`
   routes `/public/auth/login` as `/auth/login` — nor lukk's extra guard mounts on the same host: point
   `api.target` at a host or prefix that does not serve lukk's routes at all.
@@ -278,6 +309,11 @@ The proxies refuse more:
   tab, LF or CR splits (`.%2509.`). A dot inside a segment name (`v1.2`, `.well-known`, `..y`) is
   unaffected. Check that no real API path carries an encoded separator around a dot segment.
 - **Route checks collapse repeated slashes**, so `/api//auth/login` is refused like `/api/auth/login`.
+- **The auth proxy refuses a path lukk routes nowhere but a hop in front might** with `404`: an empty
+  segment (`/api/_lukk//logout`), an encoded slash or backslash (`%2F`, `%5C`) or an encoded `%` (`%25`).
+  A trailing run of slashes is still forwarded. [Details](/transport-modes#bff-mode).
+- **Both proxies answer `414`** for a path longer than **8 KiB** as the upstream URL serialises it (query
+  aside; a `{` or `"` counts three, as `%7B`/`%22`) — nginx's and Apache's default request-line limit.
 - **Both proxies refuse a `cross-site` or `same-site` GET that isn't a top-level navigation** (an `<img>`
   pointing at them, say) with `403` — the app-API proxy now too, since it injects the bearer. Only
   `Sec-Fetch-Dest: document` counts as top-level, so a navigation into an `<iframe>`, `<frame>`, `<embed>`

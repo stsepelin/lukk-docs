@@ -100,6 +100,25 @@ The model may live on its own connection (`protected $connection`). Rotation and
 
 **Model events don't fire for lukk's writes** (lukk 0.7.0). The default repository stores each refresh token with `saveQuietly()`: the write runs inside the rotation's transaction, under the parent row's lock, where no application code may run. An observer on your model used to run there — serialising the family's refreshes behind it and, on PostgreSQL, turning a swallowed failing query into a `COMMIT` that silently rolled back — and a `creating` listener returning `false` cancelled the write, so rotation handed back a refresh token that was never stored. So `creating`, `created`, `saving` and `saved` no longer fire for the rows lukk persists, and if the save still reports that nothing was written, `persist()` throws a `RuntimeException` rather than return a token it never stored. Audit sessions from lukk's [events](/events) instead (`RefreshTokenReused`, `SessionUnclaimed`, and your own login and logout listeners).
 
+### Filling your own columns
+
+With no `creating` event, **a column you used to fill from one is no longer filled** — a multi-tenancy `BelongsToTenant` trait stamping `tenant_id`, for one. On a `NOT NULL` column every sign-in and refresh then fails. Fill it as the model is **built** instead of as it is saved:
+
+- an `$attributes` default on your `useRefreshTokenModel` subclass, or
+- the trait's `initialize{TraitName}()` method, which Eloquent calls from the model's constructor without dispatching any event:
+
+```php
+trait BelongsToTenant
+{
+    public function initializeBelongsToTenant(): void
+    {
+        $this->tenant_id ??= tenant()->id;
+    }
+}
+```
+
+Overriding `persist()` in a subclass of `DatabaseRefreshTokenRepository` works too. Either way the code runs **under the rotation's row lock**, so read a value already in memory — the resolved tenant, a config value — and never query.
+
 > [!NOTE]
 > **`$timestamps = false` is safe here.** [`claim_seconds`](/configuration#refresh-behavior) recognises a session's original refresh token by its lineage — the row persisted with no predecessor — not by `created_at`, and the window itself is measured from the marker lukk wrote at sign-in. Timestamps are still worth keeping for the data-subject export, which reports when each session began.
 
