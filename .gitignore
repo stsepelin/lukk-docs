@@ -3,3 +3,5 @@ docs/.vitepress/dist
 docs/.vitepress/cache
 *.log
 .DS_Store
+# The docs use npm (package-lock.json); a pnpm install here writes a second, unused lockfile.
+pnpm-lock.yaml
