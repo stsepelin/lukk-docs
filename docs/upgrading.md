@@ -23,8 +23,6 @@ impact tags. Read it (and the changelog) before bumping:
 
 ## Highest-impact change right now
 
-<!-- Release step: the two #upgrading-to-070-from-06x links resolve only once lukk's UPGRADE.md heading drops "(unreleased)"; until then GitHub's anchor is #upgrading-to-070-from-06x-unreleased. -->
-
 > [!WARNING]
 > **lukk `0.7.0` reworks `POST /auth/logout`.** It is no longer behind `auth:{guard}`: a valid access
 > token **or** the client's refresh token ends the session, so an idle tab whose access token has
