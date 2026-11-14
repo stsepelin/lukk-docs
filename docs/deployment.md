@@ -115,7 +115,7 @@ Those feed the `keys` block in `config/lukk.php`:
 ],
 ```
 
-The auth service now exposes `GET /auth/jwks` — a cacheable JWK Set of **public keys only**. Each verify-only API runs the same algorithm with just the **public** key, filed under the issuer's `kid`, and no private key, so it can validate tokens but never sign them:
+The auth service now exposes `GET /auth/jwks` — a cacheable JWK Set of **public keys only**. It is served as `application/jwk-set+json` (RFC 7517 §8.5.1). Each verify-only API runs the same algorithm with just the **public** key, filed under the issuer's `kid`, and no private key, so it can validate tokens but never sign them:
 
 ```dotenv
 # on each verify-only API service

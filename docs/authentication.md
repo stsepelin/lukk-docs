@@ -320,6 +320,8 @@ You don't normally call `initSession()` yourself — the plugin does. It's expos
 
 `loggedIn` means "a user was loaded", so an app with no [`user.endpoint`](/user) reads as signed out even with a valid session.
 
+The "couldn't tell" row is also where a tab lands when **another tab changes the session** — signs in as someone else — and this tab can't reload the user (the endpoint is down). Rather than keep the previous account on screen while requests run as the new one, `user` becomes `null` and `restoreFailed` is `true`; a retry with `initSession()` picks the session up.
+
 **Gate decisions on `ready`.** Anything that would be wrong for a signed-in visitor — redirecting to `/login`, skipping a data fetch, dropping a `?id=` from the URL — should wait for it.
 
 #### Where it's `false`

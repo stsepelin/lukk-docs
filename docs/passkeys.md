@@ -141,7 +141,7 @@ In lukk-js, `useLukkPasskeys().login()` resolves to that answer (lukk-nuxt 0.12)
 
 ### Managing passkeys
 
-`GET /auth/passkeys` lists the current user's credentials, and `DELETE /auth/passkeys/{id}` revokes one (behind step-up confirmation).
+`GET /auth/passkeys` lists the current user's credentials, and `DELETE /auth/passkeys/{id}` revokes one (behind step-up confirmation). The id must be spelled exactly as the list returns it. Once a credential is removed, the account's **other sessions are signed out** — the device that held it may be the reason it is being removed — and the session that made the request stays.
 
 Registering one dispatches [`PasskeyRegistered`](/events#authenticator-events), and removing one dispatches `PasskeyDeleted`. Listen to tell the user through another channel (lukk 0.7.0).
 

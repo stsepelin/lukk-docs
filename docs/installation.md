@@ -117,6 +117,8 @@ export default defineNuxtConfig({
 ```
 
 > [!NOTE]
+> `mode` must be exactly `'bff'` or `'direct'`; anything else fails the build. A production build also warns when `baseURL` (or `api.target`) is plain `http://` on another host, since credentials and tokens would cross the network unencrypted.
+
 > In `bff` mode `baseURL` is used **only on the server** — never exposed to the browser, which talks to the same-origin proxy at `/api/_lukk`. In `direct` mode it's public, since the browser calls lukk itself.
 
 ### The user endpoint

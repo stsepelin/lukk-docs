@@ -59,7 +59,7 @@ Switching the feature off takes a value somebody set: `false`, `0` or `'0'`. If 
 | `POST` | `/auth/two-factor/confirm` | `auth` + confirm + throttle | Activate 2FA after a valid `code` (`204`). `409` when it is already on (lukk 0.7.0). |
 | `GET` | `/auth/two-factor/recovery-codes` | `auth` + [`RequirePinnedAbility:lukk.account`](/abilities#lukk-s-own-routes) | How many recovery codes remain → `{ remaining, total }` (a count — never the codes). |
 | `POST` | `/auth/two-factor/recovery-codes` | `auth` + confirm | Regenerate recovery codes → `{ recovery_codes }`. `409` on an account with 2FA neither on nor being enrolled (lukk 0.7.0). |
-| `DELETE` | `/auth/two-factor` | `auth` + confirm | Disable 2FA. |
+| `DELETE` | `/auth/two-factor` | `auth` + confirm | Disable 2FA. When a confirmed second factor was removed, the account's other sessions are signed out; this one stays. Cancelling an enrolment that was never confirmed signs nobody out. |
 | `POST` | `/auth/two-factor-challenge` | `throttle` | Exchange a `challenge_token` + `code` **or** `recovery_code` for a token pair. Sending both is a `422`. |
 
 > [!NOTE]
