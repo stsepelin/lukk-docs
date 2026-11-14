@@ -130,6 +130,8 @@ Protect admin routes with `auth:admin`; they resolve against the `admins` table 
 
 Per the standards, a **shared secret + distinct audience is a fully compliant control** (ASVS §9.2.4; RFC 8725 lists key-separation and audience-differentiation as co-equal). Separate per-guard `secret`/keys are the stronger **defense-in-depth** option. Either way, the **audience is what isolates the tokens**, so lukk **refuses to boot** unless every guard declares a distinct, non-empty audience and mounts at a distinct path/domain — and unless every extra guard is declared in `config/auth.php` with the `lukk-jwt` driver, every `lukk-jwt` guard there has a `lukk.guards` block (the default guard excepted), and no block is named after the default guard. A numeric guard name, or a list of names instead of a `name => [...]` map, is refused too (lukk 0.7.0).
 
+A guard that declares its own `keys.public` verifies with **exactly** those keys, and publishes only them at its JWKS endpoint; the default guard's are not merged in. A guard that declares none inherits the default set.
+
 ## Path vs. subdomain
 
 Set a guard's `domain` to serve it on a **subdomain** instead of a path — the stronger isolation:

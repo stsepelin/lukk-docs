@@ -66,6 +66,10 @@ It runs on the **same budget as [step-up confirmation](/confirmation)** — the 
 
 That's deliberate. Both endpoints verify the same secret, so giving each its own allowance would simply mean twice as many guesses at one password.
 
+A success also drops any [reset link](/password-reset) requested before it, so an older link can't undo the change.
+
+The new hash is written with one conditional `UPDATE` — only over the password that was checked — so a [reset](/password-reset) that lands mid-request is never overwritten. Your user model's `updated` and `saved` events still fire, after the write; `saving` and `updating` don't, so use the [event](#the-event) below rather than those to react to a change.
+
 A success clears **both** the `confirm` and the `login` counters. The failures they hold were against a password that no longer exists — and without releasing `login`, a user who was being brute-forced, noticed, and changed their password would still be locked out of login on every other device, with a password reset as the only way back.
 
 ### The event
