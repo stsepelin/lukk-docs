@@ -48,17 +48,25 @@ By default lukk validates the `email` and `password` against your configured use
 ```php
 use Illuminate\Http\Request;
 use Lukk\Lukk;
+use Lukk\Support\HashablePassword;
 
 Lukk::authenticateUsing(function (Request $request) {
     $user = User::where('email', $request->input('email'))->first();
 
-    if ($user && Hash::check($request->input('password'), $user->password) && $user->is_active) {
+    // As typed, then normalized: lukk stores new passwords in NFKC (see below).
+    $matches = $user && collect(HashablePassword::spellings((string) $request->input('password')))
+        ->contains(fn (string $spelling) => Hash::check($spelling, $user->password));
+
+    if ($matches && $user->is_active) {
         return $user;
     }
 
     return null;
 });
 ```
+
+> [!NOTE]
+> **Check both spellings of the password.** Registration, reset and change-password store a new password [normalized](/security#password-policy) (NFKC), so `é` typed as `e` plus a combining accent — what some keyboards send — is stored as the single character. A bare `Hash::check($request->input('password'), …)` then refuses that user. `HashablePassword::spellings()` returns the password as typed and, when it differs, normalized; for nearly every password that is one entry, so it costs one check.
 
 > [!WARNING]
 > If your callback authenticates on a **different field**, set `lukk.username` to match it. The login throttle and the [account lockout](/account-lockout) both key on that field — with a mismatch the lockout never sees an identifier to count and silently does nothing.
