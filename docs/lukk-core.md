@@ -47,8 +47,8 @@ The client attaches the bearer token, and on a `401` it calls `refresh` once and
 | `getAccessToken?` | `() => string \| null \| Promise<…>` | The bearer token to attach. |
 | `getConfirmationToken?` | `() => string \| null \| Promise<…>` | The step-up token for `X-Lukk-Confirmation`. |
 | `refresh?` | `() => Promise<RefreshOutcome>` | Renew on a 401: a `TokenPair`, [`REFRESHED_WITHOUT_TOKEN`](#renewed-without-a-token), or `null` if not refreshable. |
-| `onTokens?` | `(pair) => void` | Persist a freshly-minted pair (register / login / 2FA challenge / passkey login / restore, and the pair a `refresh` hook returns). |
-| `onUnauthenticated?` | `() => void` | Refresh failed — the session is gone. |
+| `onTokens?` | `(pair) => void` | Persist a freshly-minted pair (register / login / 2FA challenge / passkey login / restore, and the pair a `refresh` hook returns). Called once per refresh, however many requests were waiting on it. |
+| `onUnauthenticated?` | `() => void` | Refresh failed — the session is gone. Called once per refresh. |
 | `confirmationHeader?` | `string` | Header name (default `X-Lukk-Confirmation`). |
 
 Where the tokens actually live — memory, a sealed cookie, a server session — is entirely the caller's choice. The core only knows how to *speak* to lukk.
@@ -182,7 +182,7 @@ interface LukkError {
 
 One `reason` comes from the client itself. On a `401` the client renews once and retries — but only for a target on `baseURL`'s origin, where its credentials went; a `401` from another origin rejects as it came, without a renewal. When the renewal hands back a token for a **different account** than the one the request was sent as (another tab signed in, and the refresh cookie is shared), the request is not sent again: it rejects with `status: 401` and `reason: SESSION_CHANGED` (`'session_changed'`, exported). The new session is kept; whether to repeat the action as that account is the caller's decision. (lukk-nuxt's `useLukkAuth` does not read it as a sign-out when it comes back from loading the user: it loads once more as the account the session now holds, and if that fails too, treats it as a load that couldn't tell rather than signing the tab out.) The accounts are compared by the JWT's `sub`, decoded but not verified, and only when both tokens name one.
 
-`retryAfter` (lukk-core 0.12.0) is the response's `Retry-After` header when it gives delay-seconds (RFC 9110 §10.2.3); the HTTP-date form is left out rather than guessed at, so the field is absent then. It is how a binding comes back when the server asked: a `429` from a throttle, or the lukk-nuxt BFF's `503` for a refresh lukk is slow to rotate, which [lukk-nuxt's client retries once](/transport-modes#a-slow-rotation) after at most ten seconds. lukk-core itself does not retry on it.
+`retryAfter` (lukk-core 0.12.0) is the response's `Retry-After` header when it gives delay-seconds (RFC 9110 §10.2.3); the HTTP-date form is left out rather than guessed at, so the field is absent then. It is how a binding comes back when the server asked: a `429` from a throttle or a `423` from a timed lockout (the lukk-nuxt BFF relays lukk's header from the next release; it dropped it before), or the BFF's own `503` for a refresh lukk is slow to rotate, which [lukk-nuxt's client retries once](/transport-modes#a-slow-rotation) after at most ten seconds. lukk-core itself does not retry on it. At most nine digits are read. Called cross-origin from a browser, the header is only readable if lukk's CORS config exposes it (`exposed_headers: ['Retry-After']`).
 
 ```ts
 try {
