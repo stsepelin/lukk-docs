@@ -55,7 +55,7 @@ The `iss` and `aud` claims stamped into every token and validated on every reque
 
 | Key | Default | Description |
 |---|---|---|
-| `access_ttl` | `900` (15 min) | Access-token lifetime, in seconds. Keep it short — revocation latency is bounded by this value. |
+| `access_ttl` | `900` (15 min) | Access-token lifetime, in seconds. Keep it short — revocation latency is bounded by this value. The stock key is cast to an integer in the config file. A per-guard override given as a bare `env()` is not: there, a value that is not a number reads as the default `900` — from the next lukk release in the revoke actions too, which used to read it as `0`. |
 | `refresh_ttl` | `2592000` (30 days) | The **absolute** session lifetime, in seconds. It is set at login and inherited by every rotation — it does **not** slide, so a session ends `refresh_ttl` after login regardless of activity, and the user must log in again. In cookie mode the refresh cookie's `Max-Age` follows it: from lukk 0.7.0 each rotation sets it to what is left of the session, not a fresh `refresh_ttl`. |
 
 ### Refresh behavior
